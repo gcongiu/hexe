@@ -1,8 +1,10 @@
-#include "memkind.h"
+#ifndef PREFETCH_H
+#define PREFETCH_H
+
 #include <assert.h>
 #include <string.h>
 #include <sched.h> 
-#include "prefetch.h"
+#include "prefetch_intern.h"
 
 
 inline int lock(uint32_t * log)
@@ -39,15 +41,9 @@ static inline int copy_continous(void *src, void *dst, size_t size, struct prefe
     {
         int id = omp_get_thread_num();
         int chunk_size = size/thread->n_prefetch_threads;
-	int offset = chunk_size *id;
-	if(id == thread->n_prefetch_threads-1){	
-		chunk_size +=  size%thread->n_prefetch_threads;
-   	}
-
-        if(thread->init == 0 && thread->cpusets) {
-            hwloc_set_cpubind    (thread->topology, thread->cpusets[id], HWLOC_CPUBIND_THREAD);
-#pragma omp master
-            thread->init = 1;
+        int offset = chunk_size *id;
+        if(id == thread->n_prefetch_threads-1){	
+            chunk_size +=  size%thread->n_prefetch_threads;
         }
 
         memcpy((char*)dst+offset, (char*)src+offset, chunk_size);
@@ -77,7 +73,7 @@ static inline int copy_noncontinous(const void *src_start, const void *dst,
     return 0;
 }
 
-void *exec_prefetch_thread(void *data)
+static void *exec_prefetch_thread(void *data)
 {
 
     struct prefetch_thread *thread = (struct prefetch_thread *) data;
@@ -87,20 +83,27 @@ void *exec_prefetch_thread(void *data)
     int i;
 
     omp_set_dynamic(0);
+    omp_set_num_threads(thread->n_prefetch_threads);
+    printf("hello \n");
+#pragma omp parallel
+    {
+        int id = omp_get_thread_num();
 
+        printf("I am prefetc prefetchh thread id %d \n", id);
+        if(thread->init == 0 && thread->cpusets) {
+            hwloc_set_cpubind    (thread->topology, thread->cpusets[id], HWLOC_CPUBIND_THREAD);
 
-/*   pthread_mutex_lock(&thread->mv);
-*/
-    while (1) {
-/*
-        volatile int wake = thread->wakeup;
-
-        while(wake!=1) {
-            pthread_cond_wait(&thread->cv, &thread->mv);
-            pthread_mutex_unlock(&thread->mv);
-            wake = thread->wakeup;
         }
-*/
+
+#pragma omp master
+        thread->init = 1;
+    }
+
+
+
+    /*   pthread_mutex_lock(&thread->mv);
+    */
+    while (1) {
         volatile int done = thread->task_list[thread->current_out].done;
         while (!done) {
             task = &thread->task_list[thread->current_out++];
@@ -132,9 +135,9 @@ void *exec_prefetch_thread(void *data)
 }
 
 #ifdef USE_EMU
-prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t offset, size_t size, prefetch_thread_t thread) {
+inline prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t offset, size_t size, prefetch_thread_t thread) {
 #else
-    prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t size, prefetch_thread_t thread) {
+inline    prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t size, prefetch_thread_t thread) {
 #endif
 
         struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
@@ -173,9 +176,9 @@ prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t offset, 
 
 
 #ifdef USE_EMU
-prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, size_t offset, int* offsets, size_t element_size, int elements,  prefetch_thread_t thread) {
+inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, size_t offset, int* offsets, size_t element_size, int elements,  prefetch_thread_t thread) {
 #else
-prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, int* offsets, size_t element_size, int elements,  prefetch_thread_t thread) {
+inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, int* offsets, size_t element_size, int elements,  prefetch_thread_t thread) {
 #endif
 
     struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
@@ -216,7 +219,7 @@ prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, int* o
 
 }
 
-int prefetch_wakeup(prefetch_thread_t thread){
+inline int prefetch_wakeup(prefetch_thread_t thread){
 
     struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
  //   pthread_mutex_lock(&prefetcher->mv);
@@ -227,7 +230,7 @@ int prefetch_wakeup(prefetch_thread_t thread){
     return 0;
 }
 
-int prefetch_allow_sleep(prefetch_thread_t thread) {
+inline int prefetch_allow_sleep(prefetch_thread_t thread) {
 
 
     struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
@@ -236,7 +239,9 @@ int prefetch_allow_sleep(prefetch_thread_t thread) {
   // pthread_mutex_unlock(&prefetcher->mv);
 
 }
-int prefetch_wait(prefetch_handle_t handle) {
+
+
+inline int prefetch_wait(prefetch_handle_t handle) {
     struct prefetch_task *task  = (struct prefetch_task*) handle;
     volatile int tmp = task->done;
 
@@ -247,7 +252,7 @@ int prefetch_wait(prefetch_handle_t handle) {
     return 0;
 }
 
-int prefetch_wait_index(prefetch_handle_t handle, int index) {
+inline int prefetch_wait_index(prefetch_handle_t handle, int index) {
     struct prefetch_task *task  = (struct prefetch_task*) handle;
     volatile int tmp = task->index;
 
@@ -257,14 +262,14 @@ int prefetch_wait_index(prefetch_handle_t handle, int index) {
     }
     return 0;
 }
-prefetch_thread_t create_new_thread(int queue_length, int prefetch_threads) {
+inline prefetch_thread_t create_new_thread(int queue_length, int prefetch_threads) {
 
     struct prefetch_thread *thread;
     struct prefetch_task  *tasks;
     int i;
-    thread = (struct prefetch_thread *)memkind_malloc(MEMKIND_DEFAULT, sizeof(struct prefetch_thread));
+    thread = (struct prefetch_thread *)malloc(sizeof(struct prefetch_thread));
     assert(thread);
-    tasks = (struct prefetch_task*)memkind_malloc(MEMKIND_DEFAULT, sizeof(struct prefetch_task)* queue_length);
+    tasks = (struct prefetch_task*)malloc(sizeof(struct prefetch_task)* queue_length);
     assert(tasks);
     for (i = 0; i< queue_length; i++) {
         tasks[i].done = 1;
@@ -289,14 +294,14 @@ prefetch_thread_t create_new_thread(int queue_length, int prefetch_threads) {
   //  pthread_detach(thread->thread);
     return thread->handle;
 }
-prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_topology_t topology, hwloc_cpuset_t  *cpusets, int n_threads) {
+inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_topology_t topology, hwloc_cpuset_t  *cpusets, int n_threads) {
 
     struct prefetch_thread *thread;
     struct prefetch_task  *tasks;
     int i;
-    thread = (struct prefetch_thread *)memkind_malloc(MEMKIND_DEFAULT, sizeof(struct prefetch_thread));
+    thread = (struct prefetch_thread *)malloc(sizeof(struct prefetch_thread));
     assert(thread);
-    tasks = (struct prefetch_task*)memkind_malloc(MEMKIND_DEFAULT, sizeof(struct prefetch_task)* queue_length);
+    tasks = (struct prefetch_task*)malloc(sizeof(struct prefetch_task)* queue_length);
     assert(tasks);
 
     for (i = 0; i< queue_length; i++) {
@@ -321,21 +326,24 @@ prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_topology_t
 
 
     thread->n_prefetch_threads = n_threads;
+    printf("Hello \n");
     pthread_create(&thread->thread, NULL,
                          exec_prefetch_thread, (void*)thread);
   //  pthread_detach(thread->thread);
     return thread->handle;
 }
-void finish_thread( prefetch_thread_t thread) {
+
+
+static inline void finish_thread( prefetch_thread_t thread) {
     struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
     volatile int out  = prefetcher->open_tasks;
- /*   while(out) {
-        out  = prefetcher->open_tasks;
-    };
-*/
+    /*   while(out) {
+         out  = prefetcher->open_tasks;
+         };
+         */
     pthread_cancel(prefetcher->thread);
-    memkind_free(MEMKIND_DEFAULT, prefetcher->task_list);
-    memkind_free(MEMKIND_DEFAULT, prefetcher);
+    free(prefetcher->task_list);
+    free(prefetcher);
 }
 
-//}
+#endif

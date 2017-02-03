@@ -1,32 +1,40 @@
 CC = 	icc
 CFLAGS = -I/home/loden/host_libs/include
 
-default: libhexeknl.a
+default: libhexeknl.a\
+		 examples/init.bin
 
 SRC = src/hexe.c\
 	 src/prefetch.c
 INC = include/hexe.h\
   	  include/prefetch.h
 
-OBJ = obj/hexe.o obj/prefetch.o
+OBJ = obj/hexe.o 
 
 clean:
-	rm -rf obj/* 
+	rm -rf obj/* examples/*.bin
 
+CFLAGS =   -O2 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
+		      -I/soft/perftools/tau/papi-knl/include\
+			  -I/home/loden/host_libs/include\
+			 -I/home/loden/hexe_c/include  -qopenmp 
 
+CFLAGS  += -I./include/ -I./src
 
-CFLAGS =   -O3 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
-		     -I/home/loden/knl_memkind/include/  -qopenmp
-CFLAGS  += -I./include/
-LD_FLAGS = -qopenmp 
+LIBS =  -qopenmp -lpapi -L/soft/perftools/tau/papi-knl/lib/
 
+CLINKFLAGS =	-O2 -fasm-blocks  -g -qopenmp -lnuma  -lhwloc -qopenmpi -L/home/loden/host_libs/lib/ 
 
-obj/%.o: src/%.c
+obj/%.o: src/%.c src/prefetch.h
 	 $(CC) $(CFLAGS) -c -o $@ $<
 
+examples/%.bin: examples/%.o  
+	$(CC) $ $(CLINKFLAGS) -o $@ $<  libhexeknl.a  
 
-libhexeknl.a: $(OBJ) /home/loden/knl_memkind/lib/libmemkind.a
-	ar cvr libhexeknl.a  $(OBJ) /home/loden/knl_memkind/lib/libmemkind.a
+examples/%.o: examples/%.c libhexeknl.a
+	$(CC) $ $(CFLAGS) -c -o $@ $<
 
-clean:
-	rm -rf obj/* .lib/
+libhexeknl.a: $(OBJ) 
+	ar cvr libhexeknl.a  $(OBJ)
+
+
