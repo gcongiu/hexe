@@ -84,12 +84,10 @@ static void *exec_prefetch_thread(void *data)
 
     omp_set_dynamic(0);
     omp_set_num_threads(thread->n_prefetch_threads);
-    printf("hello \n");
+
 #pragma omp parallel
     {
         int id = omp_get_thread_num();
-
-        printf("I am prefetc prefetchh thread id %d \n", id);
         if(thread->init == 0 && thread->cpusets) {
             hwloc_set_cpubind    (thread->topology, thread->cpusets[id], HWLOC_CPUBIND_THREAD);
 

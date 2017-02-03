@@ -1,8 +1,10 @@
 CC = 	icc
 CFLAGS = -I/home/loden/host_libs/include
 
-default: libhexeknl.a\
-		 examples/init.bin
+default: libhexeknl.a
+
+example: examples/init.bin\
+		 examples/start_sync.bin
 
 SRC = src/hexe.c\
 	 src/prefetch.c

@@ -97,8 +97,8 @@ static void detect_knl_mode(struct hexe *h)
             h->memory_mode = HYBRID25;
         }
     }
-    else 
-        h->memory_mode = -1; 
+    else
+        h->memory_mode = CACHE;  /*we assume not to have different types */;
     cluster_mode = hwloc_obj_get_info_by_name(root, "ClusterMode");
     if(cluster_mode){
         if(strncmp(cluster_mode, "Quadrant" , sizeof("Quadrant"))== 0) {
@@ -180,8 +180,8 @@ static void detect_knl_mode(struct hexe *h)
         if(numa_nodes) {
             h->ddr_sets = malloc(sizeof(hwloc_bitmap_t) * numa_nodes);
             h->mcdram_sets = NULL;
-
             h->all_ddr = hwloc_bitmap_alloc();
+            h->compute_threads = cores ;
             for (i = 0; i<numa_nodes; i++) {
                 obj=hwloc_get_obj_by_type(h->topology, HWLOC_OBJ_NUMANODE, i);
                 h->ddr_sets[i]=obj->nodeset;
@@ -351,31 +351,36 @@ int hexe_set_compute_threads(int threads){
 
 int hexe_finalize()
 {
-
-  if(prefetcher->thread)
-      finish_thread( prefetcher->thread);
-  if(prefetcher->cache) 
-      hexe_free_pool();
-
-   hwloc_topology_destroy(prefetcher->topology);
-   free(prefetcher);
+    if(prefetcher->memory_mode == CACHE){
+        if(prefetcher->cache_pool)
+            free(prefetcher->cache_pool);
+    }
+    else {
+        if(prefetcher->thread)
+            finish_thread( prefetcher->thread);
+        if(prefetcher->cache) 
+            hexe_free_pool();
+    }
+    hwloc_topology_destroy(prefetcher->topology);
+    free(prefetcher);
 }
 
 int hexe_start()
 {
+    if(prefetcher->compute_threads) {
+         omp_set_num_threads(prefetcher->compute_threads);
+         #pragma omp parallel
+        {
+            int id = omp_get_thread_num();
+             hwloc_set_cpubind    (prefetcher->topology, prefetcher->compute_cpusets[id], HWLOC_CPUBIND_THREAD);
+        }
+    }
     if(prefetcher->memory_mode == CACHE)
         return 0;
     if(!prefetcher)
         return -1;
     if(! prefetcher->cache_pool)
         return -1;
-    omp_set_num_threads(prefetcher->compute_threads);
-    #pragma omp parallel 
-    {
-        int id = omp_get_thread_num();
-        printf("I am compute thread id %d \n", id);
-         hwloc_set_cpubind    (prefetcher->topology, prefetcher->compute_cpusets[id], HWLOC_CPUBIND_THREAD);
-    }
     if (prefetcher->prefetch_cpusets)
         prefetcher->thread =  create_new_thread_with_topo(prefetcher->ncaches, prefetcher->topology, prefetcher->prefetch_cpusets, prefetcher->prefetch_threads);
     else
@@ -393,6 +398,18 @@ void* hexe_request_hbw(size_t size, int prioriy) {
 
 }
 
+static inline int malloc_fake_pool(int n) {
+
+    int i;
+    prefetcher->ncaches = n;
+    prefetcher->cache_pool = (void**)malloc( sizeof(void*) * n);
+     if(!prefetcher->cache_pool)
+        return -1;
+    prefetcher->cache = NULL;
+    for(i = 0; i<n; i++){
+         prefetcher->cache_pool[i]  = NULL;
+    }
+}
 
 
 int hexe_alloc_pool(size_t size, int n){
@@ -400,20 +417,20 @@ int hexe_alloc_pool(size_t size, int n){
     size_t total_size = (size * n);
     int i;
     unsigned long node_mask;
-    if(prefetcher->memory_mode == CACHE)
-        return 0;
-
-    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
 
     prefetcher->handle = (prefetch_handle_t*)  malloc(sizeof(prefetch_handle_t) * n);;
-    memset(prefetcher->handle, 0x0, sizeof(prefetch_handle_t)*n);
+    memset(prefetcher->handle, 0x0, sizeof(prefetch_handle_t)*n); 
 
-    if(total_size % _SC_PAGE_SIZE != 0)
+    if(prefetcher->memory_mode == CACHE)
+        return malloc_fake_pool(n);
+
+   if(total_size % _SC_PAGE_SIZE != 0)
         total_size =  (total_size + _SC_PAGE_SIZE) & ~(0xfff);
     prefetcher->ncaches = n;
     prefetcher->cache_size = total_size;
-    prefetcher->cache_pool = (void**)malloc( sizeof(void*) * n);
+    prefetcher->cache_pool = (void**)malloc( sizeof(void*) * n * 2);
 
+    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
     if(!prefetcher->cache_pool)
         return -1;
 
@@ -428,7 +445,7 @@ int hexe_alloc_pool(size_t size, int n){
     madvise(prefetcher->cache, total_size, MADV_HUGEPAGE);
 
     for(i = 0; i<n; i++){
-        prefetcher->cache_pool[i] = &((char*)(prefetcher->cache))[i* size];
+        prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* size];
     }
    return 0;
 
@@ -453,23 +470,25 @@ void hexe_free_pool()
 
 int hexe_start_fetch_continous(void *start_addr, size_t size, int idx)
 {
-    if(prefetcher->memory_mode == CACHE)
-        return 0; 
+    if(prefetcher->memory_mode == CACHE){
+        prefetcher->cache_pool[idx]= start_addr;
+        return 0;
+    }
     hexe_sync_fetch(idx);
-    prefetcher->handle[idx] = start_prefetch_continous(start_addr, prefetcher->cache_pool[idx], size ,prefetcher->thread);
+    prefetcher->handle[idx] = start_prefetch_continous(start_addr, prefetcher->cache_pool[2*idx], size ,prefetcher->thread);
 
     return 0;
 }
 
 
-int hexe_start_write_back_continous(int cache_idx, void *start_addr, size_t size){
+int hexe_start_write_back_continous(int cache_idx, size_t size){
 
     if(prefetcher->memory_mode == CACHE)
         return 0; 
 
     hexe_sync_fetch(cache_idx);
-
-    prefetcher->handle[cache_idx] = start_prefetch_continous(prefetcher->cache_pool[cache_idx], start_addr, size, prefetcher->thread);
+    printf("have %p\n", prefetcher->cache_pool[2*cache_idx+1]);
+    prefetcher->handle[cache_idx] = start_prefetch_continous(prefetcher->cache_pool[2*cache_idx], prefetcher->cache_pool[2*cache_idx+1], size, prefetcher->thread);
 
     return 0;
 }
@@ -484,24 +503,30 @@ int hexe_start_fetch_non_continous(void *start_addr, int* offset_list, size_t el
     return 0;
 }
 
-void *hexe_get_cache(int idx) {
+void *hexe_get_cache_for_write_back(int idx, void *addr) {
 
+    if(prefetcher->memory_mode == CACHE)
+    {
+        prefetcher->cache_pool[idx]= addr;
+        return addr;
+    }
+    prefetcher->cache_pool[idx*2+1]= addr;
     return   hexe_sync_fetch(idx);
 
 }
 void* hexe_sync_fetch(int idx){
 
-    if(prefetcher->handle[idx]!=0)
-        prefetch_wait(prefetcher->handle[idx]);
+   if(prefetcher->handle[idx]!=0)
+       prefetch_wait(prefetcher->handle[idx]);
+
     prefetcher->handle[idx] = 0;
 
-
-    return prefetcher->cache_pool[idx];
+    return prefetcher->cache_pool[2*idx];
 }
 
 void* hexe_wait_index(int idx, int index){
 
     prefetch_wait_index(prefetcher->handle[idx], index); 
-    return prefetcher->cache_pool[idx];
-    return 0;
+    return prefetcher->cache_pool[idx*2];
+
 }
