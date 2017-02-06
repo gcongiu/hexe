@@ -26,7 +26,6 @@ enum MemoryMode
 
 
 struct hexe{
-	prefetch_thread_t thread;
 	void **cache_pool;
 	void *cache;
 	size_t cache_size;
@@ -330,7 +329,6 @@ int hexe_init()
     if(sthreads)
        prefetcher->compute_threads = atoi(sthreads);
 
-    printf("Have %d compute and %d prefetch threads\n", prefetcher->compute_threads, prefetcher->prefetch_threads);
     hexe_distribute_threads_knl();
 
 }
@@ -356,8 +354,7 @@ int hexe_finalize()
             free(prefetcher->cache_pool);
     }
     else {
-        if(prefetcher->thread)
-            finish_thread( prefetcher->thread);
+        finish_thread( );
         if(prefetcher->cache) 
             hexe_free_pool();
     }
@@ -382,9 +379,9 @@ int hexe_start()
     if(! prefetcher->cache_pool)
         return -1;
     if (prefetcher->prefetch_cpusets)
-        prefetcher->thread =  create_new_thread_with_topo(prefetcher->ncaches, prefetcher->topology, prefetcher->prefetch_cpusets, prefetcher->prefetch_threads);
+       create_new_thread_with_topo(prefetcher->ncaches, prefetcher->topology, prefetcher->prefetch_cpusets, prefetcher->prefetch_threads);
     else
-        prefetcher->thread =  create_new_thread(prefetcher->ncaches, prefetcher->prefetch_threads);
+        create_new_thread(prefetcher->ncaches, prefetcher->prefetch_threads);
 }
 
 void* hexe_request_hbw(size_t size, int prioriy) {
@@ -475,20 +472,45 @@ int hexe_start_fetch_continous(void *start_addr, size_t size, int idx)
         return 0;
     }
     hexe_sync_fetch(idx);
-    prefetcher->handle[idx] = start_prefetch_continous(start_addr, prefetcher->cache_pool[2*idx], size ,prefetcher->thread);
+    prefetcher->handle[idx] = start_prefetch_continous(start_addr, prefetcher->cache_pool[2*idx], size);
+
+    return 0;
+}
+
+int hexe_start_fetch_strided(void *start_addr, size_t count, size_t block_len, size_t stride,  int idx)
+{
+    if(prefetcher->memory_mode == CACHE){
+        printf("not supported\n");
+        prefetcher->cache_pool[idx]= start_addr;
+        return 0;
+    }
+    hexe_sync_fetch(idx);
+    prefetcher->handle[idx] = start_prefetch_strided(start_addr, prefetcher->cache_pool[2*idx], count, block_len, stride);
 
     return 0;
 }
 
 
-int hexe_start_write_back_continous(int cache_idx, size_t size){
+
+int hexe_start_write_back_continous(size_t size, int cache_idx){
 
     if(prefetcher->memory_mode == CACHE)
         return 0; 
 
     hexe_sync_fetch(cache_idx);
-    printf("have %p\n", prefetcher->cache_pool[2*cache_idx+1]);
-    prefetcher->handle[cache_idx] = start_prefetch_continous(prefetcher->cache_pool[2*cache_idx], prefetcher->cache_pool[2*cache_idx+1], size, prefetcher->thread);
+    prefetcher->handle[cache_idx] = start_prefetch_continous(prefetcher->cache_pool[2*cache_idx], prefetcher->cache_pool[2*cache_idx+1], size);
+
+    return 0;
+}
+
+int hexe_start_write_back_strided(size_t count, size_t block_len, size_t stride,  int idx)
+{
+    if(prefetcher->memory_mode == CACHE){
+        printf("not supported\n");
+        return 0;
+    }
+    hexe_sync_fetch(idx);
+    prefetcher->handle[idx] = start_write_back_strided(prefetcher->cache_pool[2*idx], prefetcher->cache_pool[2*idx+1],  count, block_len, stride);
 
     return 0;
 }
@@ -498,7 +520,7 @@ int hexe_start_fetch_non_continous(void *start_addr, int* offset_list, size_t el
     if(prefetcher->memory_mode == CACHE)
         return 0; 
 
-    prefetcher->handle[idx] = start_prefetch_noncontinous(start_addr, prefetcher->cache_pool[idx], offset_list, element_size, elements, prefetcher->thread);
+    prefetcher->handle[idx] = start_prefetch_noncontinous(start_addr, prefetcher->cache_pool[idx], offset_list, element_size, elements);
 
     return 0;
 }

@@ -4,7 +4,10 @@ CFLAGS = -I/home/loden/host_libs/include
 default: libhexeknl.a
 
 example: examples/init.bin\
-		 examples/start_sync.bin
+		 examples/start_sync.bin\
+		 examples/start_sync_strided.bin
+
+all: default  example
 
 SRC = src/hexe.c\
 	 src/prefetch.c

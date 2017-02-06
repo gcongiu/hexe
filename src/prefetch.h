@@ -34,16 +34,18 @@ static void copy_worker(void )
 
 }*/
 
-static inline int copy_continous(void *src, void *dst, size_t size, struct prefetch_thread *thread)
+struct prefetch_thread *pre_thread;
+
+static inline int copy_continous(void *src, void *dst, size_t size)
 {
 
-#pragma omp parallel num_threads(thread->n_prefetch_threads)
+#pragma omp parallel num_threads(pre_thread->n_prefetch_threads)
     {
         int id = omp_get_thread_num();
-        int chunk_size = size/thread->n_prefetch_threads;
+        int chunk_size = size/pre_thread->n_prefetch_threads;
         int offset = chunk_size *id;
-        if(id == thread->n_prefetch_threads-1){	
-            chunk_size +=  size%thread->n_prefetch_threads;
+        if(id == pre_thread->n_prefetch_threads-1){	
+            chunk_size +=  size%pre_thread->n_prefetch_threads;
         }
 
         memcpy((char*)dst+offset, (char*)src+offset, chunk_size);
@@ -52,6 +54,30 @@ static inline int copy_continous(void *src, void *dst, size_t size, struct prefe
 
     return 0;
 }
+static inline int copy_strided2continous(void *src, void *dst, size_t count, size_t block_length, size_t stride) {
+
+ int i;
+
+#pragma omp parallel for num_threads(pre_thread->n_prefetch_threads)
+    for(i = 0; i<count; i++) {
+        memcpy((char*)dst+i*block_length, (char*)src+i*stride, block_length); 
+
+    }
+
+}
+
+static inline int copy_continous2strided(void *src, void *dst, size_t count, size_t block_length, size_t stride) {
+
+ int i;
+
+#pragma omp parallel for num_threads(pre_thread->n_prefetch_threads)
+    for(i = 0; i<count; i++) {
+        memcpy((char*)dst+i*stride, (char*)src+i*block_length, block_length); 
+
+    }
+
+}
+
 
 static inline int copy_noncontinous(const void *src_start, const void *dst,
                                     const size_t element_size, const int *offsets,
@@ -76,25 +102,25 @@ static inline int copy_noncontinous(const void *src_start, const void *dst,
 static void *exec_prefetch_thread(void *data)
 {
 
-    struct prefetch_thread *thread = (struct prefetch_thread *) data;
+
     int type;
     struct prefetch_task *task;
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, &type);
     int i;
 
     omp_set_dynamic(0);
-    omp_set_num_threads(thread->n_prefetch_threads);
+    omp_set_num_threads(pre_thread->n_prefetch_threads);
 
 #pragma omp parallel
     {
         int id = omp_get_thread_num();
-        if(thread->init == 0 && thread->cpusets) {
-            hwloc_set_cpubind    (thread->topology, thread->cpusets[id], HWLOC_CPUBIND_THREAD);
+        if(pre_thread->init == 0 && pre_thread->cpusets) {
+            hwloc_set_cpubind    (pre_thread->topology,pre_thread->cpusets[id], HWLOC_CPUBIND_THREAD);
 
         }
 
 #pragma omp master
-        thread->init = 1;
+        pre_thread->init = 1;
     }
 
 
@@ -102,15 +128,21 @@ static void *exec_prefetch_thread(void *data)
     /*   pthread_mutex_lock(&thread->mv);
     */
     while (1) {
-        volatile int done = thread->task_list[thread->current_out].done;
+        volatile int done = pre_thread->task_list[pre_thread->current_out].done;
         while (!done) {
-            task = &thread->task_list[thread->current_out++];
-            if (thread->current_out == thread->n_tasks)
-                thread->current_out = 0;
+            task = &pre_thread->task_list[pre_thread->current_out++];
+            if (pre_thread->current_out == pre_thread->n_tasks)
+                pre_thread->current_out = 0;
             switch (task->task) {
             case (FETCH_CONTIG):
-                copy_continous(task->kind.continous.source, task->dest, task->kind.continous.size, thread);
+                copy_continous(task->kind.continous.source, task->dest, task->kind.continous.size);
                 break;
+            case (FETCH_STRIDED):
+                copy_strided2continous(task->kind.strided.source, task->dest, task->kind.strided.count, task->kind.strided.block_len, task->kind.strided.stride);
+                break;
+             case (WRITE_STRIDED):
+                copy_continous2strided(task->kind.strided.source, task->dest, task->kind.strided.count, task->kind.strided.block_len, task->kind.strided.stride);
+                break; 
             case (FETCH_LIST):
                 copy_noncontinous(task->kind.list.source_start, task->dest,
                                   task->kind.list.elem_size, task->kind.list.indexes,
@@ -119,42 +151,41 @@ static void *exec_prefetch_thread(void *data)
             default:
                 printf("Failure in copy thtrad\n");
             };
-            lock(&thread->mp);
+            lock(&pre_thread->mp);
 
  	    _mm_sfence();
-            thread->open_tasks--;
+            pre_thread->open_tasks--;
             task->done = 1;
-            unlock(&thread->mp);
+            unlock(&pre_thread->mp);
 
-            done = thread->task_list[thread->current_out].done;
+            done = pre_thread->task_list[pre_thread->current_out].done;
 
         }
     }
 }
 
 #ifdef USE_EMU
-inline prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t offset, size_t size, prefetch_thread_t thread) {
+inline prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t offset, size_t size) {
 #else
-inline    prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t size, prefetch_thread_t thread) {
+inline    prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_t size) {
 #endif
 
-        struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
         volatile int free;
         struct prefetch_task *task;
 
-       lock(&prefetcher->mp);
-       task = &(prefetcher->task_list[prefetcher->current_in++]);
-        if(prefetcher->current_in == prefetcher->n_tasks)
-            prefetcher->current_in= 0;
+       lock(&pre_thread->mp);
+       task = &(pre_thread->task_list[pre_thread->current_in++]);
+        if(pre_thread->current_in == pre_thread->n_tasks)
+            pre_thread->current_in= 0;
         free = task->done;
 
         if (free == 0 )  {
-            unlock(&prefetcher->mp);
+            unlock(&pre_thread->mp);
             while (free == 0){
                 free = task->done;
             }
 
-            lock(&prefetcher->mp);
+            lock(&pre_thread->mp);
         }
         task->dest  = dst;
         task->kind.continous.source = src;
@@ -163,38 +194,131 @@ inline    prefetch_handle_t start_prefetch_continous(void *src, void *dst, size_
         task->offset = offset;
 #endif
         task->task = FETCH_CONTIG;
-        prefetcher->open_tasks++;
+        pre_thread->open_tasks++;
  	 _mm_sfence();
 
         task->done = 0;
-        unlock(&prefetcher->mp);
+        unlock(&pre_thread->mp);
         return task->handle;
 
  }
 
+inline    prefetch_handle_t start_prefetch_strided(void *src, void *dst, size_t count, size_t block_length, size_t stride) {
 
+    volatile int free;
+    struct prefetch_task *task;
+    lock(&pre_thread->mp);
+    task = &(pre_thread->task_list[pre_thread->current_in++]);
+    if(pre_thread->current_in == pre_thread->n_tasks)
+        pre_thread->current_in= 0;
+    free = task->done;
+
+    if (free == 0 )  {
+        unlock(&pre_thread->mp);
+        while (free == 0){
+            free = task->done;
+        }
+
+        lock(&pre_thread->mp);
+    }
+    task->dest  = dst;
+    task->kind.strided.source = src;
+    task->kind.strided.block_len = block_length;
+    task->kind.strided.stride = stride;
+    task->task = FETCH_STRIDED;
+    pre_thread->open_tasks++;
+    _mm_sfence();
+
+    task->done = 0;
+    unlock(&pre_thread->mp);
+    return task->handle;
+
+}
+inline    prefetch_handle_t start_write_back_strided(void *src, void *dst, size_t count, size_t block_length, size_t stride) {
+
+    volatile int free;
+    struct prefetch_task *task;
+    lock(&pre_thread->mp);
+    task = &(pre_thread->task_list[pre_thread->current_in++]);
+    if(pre_thread->current_in == pre_thread->n_tasks)
+        pre_thread->current_in= 0;
+    free = task->done;
+
+    if (free == 0 )  {
+        unlock(&pre_thread->mp);
+        while (free == 0){
+            free = task->done;
+        }
+
+        lock(&pre_thread->mp);
+    }
+    task->dest  = dst;
+    task->kind.strided.source = src;
+    task->kind.strided.block_len = block_length;
+    task->kind.strided.stride = stride;
+    task->task = WRITE_STRIDED;
+    pre_thread->open_tasks++;
+    _mm_sfence();
+
+    task->done = 0;
+    unlock(&pre_thread->mp);
+    return task->handle;
+
+}
+
+inline    prefetch_handle_t start_writeback_strided(void *src, void *dst, size_t count, size_t block_length, size_t stride) {
+
+    volatile int free;
+    struct prefetch_task *task;
+
+    lock(&pre_thread->mp);
+    task = &(pre_thread->task_list[pre_thread->current_in++]);
+    if(pre_thread->current_in == pre_thread->n_tasks)
+        pre_thread->current_in= 0;
+    free = task->done;
+
+    if (free == 0 )  {
+        unlock(&pre_thread->mp);
+        while (free == 0){
+            free = task->done;
+        }
+
+        lock(&pre_thread->mp);
+    }
+    task->dest  = dst;
+    task->kind.strided.source = src;
+    task->kind.strided.block_len = block_length;
+    task->kind.strided.stride = stride;
+    task->task = WRITE_STRIDED;
+    pre_thread->open_tasks++;
+    _mm_sfence();
+
+    task->done = 0;
+    unlock(&pre_thread->mp);
+    return task->handle;
+
+}
 #ifdef USE_EMU
-inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, size_t offset, int* offsets, size_t element_size, int elements,  prefetch_thread_t thread) {
+inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, size_t offset, int* offsets, size_t element_size, int elements) {
 #else
-inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, int* offsets, size_t element_size, int elements,  prefetch_thread_t thread) {
+inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst, int* offsets, size_t element_size, int elements) {
 #endif
 
-    struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
     int free;
-    lock(&prefetcher->mp);
-    struct prefetch_task *task = &(prefetcher->task_list[prefetcher->current_in++]);
+    lock(&pre_thread->mp);
+    struct prefetch_task *task = &(pre_thread->task_list[pre_thread->current_in++]);
     free = task->done;
     if ((!free))  {
-        unlock(&prefetcher->mp);
+        unlock(&pre_thread->mp);
         while (free){
             free = task->done;
         }
 
-        lock(&prefetcher->mp);
+        lock(&pre_thread->mp);
     }
 
-    if(prefetcher->current_in == prefetcher->n_tasks)
-       prefetcher->current_in= 0;
+    if(pre_thread->current_in == pre_thread->n_tasks)
+       pre_thread->current_in= 0;
 
 
     task->dest  = dst;
@@ -208,33 +332,29 @@ inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst,
     task->task = FETCH_LIST;
 
     task->index = -1;
-    prefetcher->open_tasks++;
+    pre_thread->open_tasks++;
     task->done = 0;
-    unlock(&prefetcher->mp);
+    unlock(&pre_thread->mp);
 
     return task->handle;
 
 
 }
 
-inline int prefetch_wakeup(prefetch_thread_t thread){
+inline int prefetch_wakeup(){
 
-    struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
- //   pthread_mutex_lock(&prefetcher->mv);
-    prefetcher->wakeup = 1;
- //   pthread_mutex_unlock(&prefetcher->mv);
-   // pthread_cond_signal(&prefetcher->cv);
+ //   pthread_mutex_lock(&pre_thread->mv);
+    pre_thread->wakeup = 1;
+ //   pthread_mutex_unlock(&pre_thread->mv);
+   // pthread_cond_signal(&pre_thread->cv);
 
     return 0;
 }
 
-inline int prefetch_allow_sleep(prefetch_thread_t thread) {
-
-
-    struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
-  // pthread_mutex_lock(&prefetcher->mv);
-    prefetcher->wakeup = 0;
-  // pthread_mutex_unlock(&prefetcher->mv);
+inline int prefetch_allow_sleep() {
+  // pthread_mutex_lock(&pre_thread->mv);
+    pre_thread->wakeup = 0;
+  // pthread_mutex_unlock(&pre_thread->mv);
 
 }
 
@@ -262,43 +382,40 @@ inline int prefetch_wait_index(prefetch_handle_t handle, int index) {
 }
 inline prefetch_thread_t create_new_thread(int queue_length, int prefetch_threads) {
 
-    struct prefetch_thread *thread;
     struct prefetch_task  *tasks;
     int i;
-    thread = (struct prefetch_thread *)malloc(sizeof(struct prefetch_thread));
-    assert(thread);
+    pre_thread = (struct prefetch_thread *)malloc(sizeof(struct prefetch_thread));
+    assert(pre_thread);
     tasks = (struct prefetch_task*)malloc(sizeof(struct prefetch_task)* queue_length);
     assert(tasks);
     for (i = 0; i< queue_length; i++) {
         tasks[i].done = 1;
         tasks[i].handle = (uint64_t)&tasks[i];
     }
-    thread->cpusets = NULL;
-    thread->handle = (uint64_t) thread;
-    thread->task_list = tasks;
-    thread->current_in = 0;
-    thread->current_out = 0;
-    thread->open_tasks = 0;
-    thread->n_tasks = queue_length;
-    pthread_cond_init(&thread->cv, NULL);
-    pthread_mutex_init(&thread->mv, NULL);
-    thread->mp = 0;
-    thread->wakeup = 0;
-    thread->init = 0;
-    thread->n_prefetch_threads = prefetch_threads;
+    pre_thread->cpusets = NULL;
+    pre_thread->task_list = tasks;
+    pre_thread->current_in = 0;
+    pre_thread->current_out = 0;
+    pre_thread->open_tasks = 0;
+    pre_thread->n_tasks = queue_length;
+    pthread_cond_init(&pre_thread->cv, NULL);
+    pthread_mutex_init(&pre_thread->mv, NULL);
+    pre_thread->mp = 0;
+    pre_thread->wakeup = 0;
+    pre_thread->init = 0;
+    pre_thread->n_prefetch_threads = prefetch_threads;
 
-    pthread_create(&thread->thread, NULL,
-                         exec_prefetch_thread, (void*)thread);
-  //  pthread_detach(thread->thread);
-    return thread->handle;
+    pthread_create(&pre_thread->thread, NULL,
+                         exec_prefetch_thread, NULL);
+    pthread_detach(pre_thread->thread);
+    return pre_thread->handle;
 }
 inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_topology_t topology, hwloc_cpuset_t  *cpusets, int n_threads) {
 
-    struct prefetch_thread *thread;
     struct prefetch_task  *tasks;
     int i;
-    thread = (struct prefetch_thread *)malloc(sizeof(struct prefetch_thread));
-    assert(thread);
+    pre_thread = (struct prefetch_thread *)malloc(sizeof(struct prefetch_thread));
+    assert(pre_thread);
     tasks = (struct prefetch_task*)malloc(sizeof(struct prefetch_task)* queue_length);
     assert(tasks);
 
@@ -306,42 +423,44 @@ inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_top
         tasks[i].done = 1;
         tasks[i].handle = (uint64_t)&tasks[i];
     }
-    thread->topology = topology;
+    pre_thread->topology = topology;
 
-    thread->cpusets = cpusets;
+    pre_thread->cpusets = cpusets;
 
-    thread->handle = (uint64_t) thread;
-    thread->task_list = tasks;
-    thread->current_in = 0;
-    thread->current_out = 0;
-    thread->open_tasks = 0;
-    thread->n_tasks = queue_length;
-    pthread_cond_init(&thread->cv, NULL);
-    pthread_mutex_init(&thread->mv, NULL);
-    thread->mp = 0;
-    thread->wakeup = 0;
-    thread->init = 0;
+    pre_thread->task_list = tasks;
+    pre_thread->current_in = 0;
+    pre_thread->current_out = 0;
+    pre_thread->open_tasks = 0;
+    pre_thread->n_tasks = queue_length;
+    pthread_cond_init(&pre_thread->cv, NULL);
+    pthread_mutex_init(&pre_thread->mv, NULL);
+    pre_thread->mp = 0;
+    pre_thread->wakeup = 0;
+    pre_thread->init = 0;
 
 
-    thread->n_prefetch_threads = n_threads;
-    printf("Hello \n");
-    pthread_create(&thread->thread, NULL,
-                         exec_prefetch_thread, (void*)thread);
-  //  pthread_detach(thread->thread);
-    return thread->handle;
+    pre_thread->n_prefetch_threads = n_threads;
+
+    pthread_create(&pre_thread->thread, NULL,
+                         exec_prefetch_thread, NULL);
+    pthread_detach(pre_thread->thread);
+
+    return 0;
 }
 
 
-static inline void finish_thread( prefetch_thread_t thread) {
-    struct prefetch_thread *prefetcher = (struct prefetch_thread *) thread;
-    volatile int out  = prefetcher->open_tasks;
+inline void finish_thread() {
+
+
+
     /*   while(out) {
-         out  = prefetcher->open_tasks;
+         out  = pre_thread->open_tasks;
          };
          */
-    pthread_cancel(prefetcher->thread);
-    free(prefetcher->task_list);
-    free(prefetcher);
+    if(pre_thread->thread)
+        pthread_cancel(pre_thread->thread);
+    free(pre_thread->task_list);
+   free(pre_thread);
 }
 
 #endif
