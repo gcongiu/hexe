@@ -110,7 +110,7 @@ static void *exec_prefetch_thread(void *data)
 
     omp_set_dynamic(0);
     omp_set_num_threads(pre_thread->n_prefetch_threads);
-
+#if 1
 #pragma omp parallel
     {
         int id = omp_get_thread_num();
@@ -122,7 +122,7 @@ static void *exec_prefetch_thread(void *data)
 #pragma omp master
         pre_thread->init = 1;
     }
-
+#endif
 
 
     /*   pthread_mutex_lock(&thread->mv);
@@ -407,7 +407,7 @@ inline prefetch_thread_t create_new_thread(int queue_length, int prefetch_thread
 
     pthread_create(&pre_thread->thread, NULL,
                          exec_prefetch_thread, NULL);
-    pthread_detach(pre_thread->thread);
+    //pthread_detach(pre_thread->thread);
     return pre_thread->handle;
 }
 inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_topology_t topology, hwloc_cpuset_t  *cpusets, int n_threads) {
@@ -443,20 +443,20 @@ inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_top
 
     pthread_create(&pre_thread->thread, NULL,
                          exec_prefetch_thread, NULL);
-    pthread_detach(pre_thread->thread);
-
+ //   pthread_detach(pre_thread->thread);
+//    sleep(4);
     return 0;
 }
 
 
 inline void finish_thread() {
 
+int out;
 
-
-    /*   while(out) {
+       while(out) {
          out  = pre_thread->open_tasks;
          };
-         */
+         
     if(pre_thread->thread)
         pthread_cancel(pre_thread->thread);
     free(pre_thread->task_list);

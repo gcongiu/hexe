@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <numaif.h>
-
+#include "list.h"
 #include <sys/mman.h>
 enum ClusterMode
 {
@@ -39,7 +39,7 @@ struct hexe{
     int memory_mode;
     int ddr_nodes;
     int mcdram_nodes;
-
+    size_t mcdram_memory;
 
 	hwloc_cpuset_t *prefetch_cpusets;
 	hwloc_cpuset_t *compute_cpusets;
@@ -75,7 +75,7 @@ static void detect_knl_mode(struct hexe *h)
     hwloc_topology_init(&h->topology);
     hwloc_topology_load(h->topology);
     root = hwloc_get_root_obj(h->topology);
-
+    h->mcdram_memory = 0 ;
     memory_mode = hwloc_obj_get_info_by_name(root, "MemoryMode");
     if(memory_mode) {
         if(strncmp(memory_mode, "Flat" , sizeof("Flat"))== 0) {
@@ -96,8 +96,11 @@ static void detect_knl_mode(struct hexe *h)
             h->memory_mode = HYBRID25;
         }
     }
-    else
+    else{
+        printf("Here\n");
         h->memory_mode = CACHE;  /*we assume not to have different types */;
+        h->mcdram_memory = (size_t)3*(1024*1024*1024);
+        }
     cluster_mode = hwloc_obj_get_info_by_name(root, "ClusterMode");
     if(cluster_mode){
         if(strncmp(cluster_mode, "Quadrant" , sizeof("Quadrant"))== 0) {
@@ -124,7 +127,7 @@ static void detect_knl_mode(struct hexe *h)
 
     }
     else
-        h->cluster_mode = -1;  
+        h->cluster_mode = -1;
 
     numa_nodes = hwloc_get_nbobjs_by_type(h->topology, HWLOC_OBJ_NUMANODE);
     cores =  hwloc_get_nbobjs_by_type(h->topology, HWLOC_OBJ_CORE);
@@ -152,6 +155,7 @@ static void detect_knl_mode(struct hexe *h)
         h->ddr_nodes = numa_nodes/2;
         for (i = 0; i<numa_nodes; i++) {
             obj=hwloc_get_obj_by_type(h->topology, HWLOC_OBJ_NUMANODE, i);
+
             if(!hwloc_bitmap_iszero(obj->cpuset)) {
                 if(i/2==2)
                 hwloc_set_cpubind    (h->topology,obj->cpuset , HWLOC_CPUBIND_THREAD);
@@ -159,8 +163,9 @@ static void detect_knl_mode(struct hexe *h)
                 hwloc_bitmap_or(h->all_ddr, obj->nodeset, h->all_ddr);
             }
             else{
-                h->mcdram_sets[i/2]=obj->nodeset;
+                h->mcdram_sets[i/2]=obj->nodeset; 
                 hwloc_bitmap_or(h->all_mcdram, obj->nodeset, h->all_mcdram);
+                h->mcdram_memory += obj->memory.total_memory;
             }
         }
 
@@ -189,7 +194,7 @@ static void detect_knl_mode(struct hexe *h)
         }
 
     }
-
+    printf("Have a total of %ld Gbyte hbw memory\n", h->mcdram_memory/(1024*1024*1024));
 }
 static int _hexe_find_sibling_knl(int core_id) {
 
@@ -384,17 +389,28 @@ int hexe_start()
         create_new_thread(prefetcher->ncaches, prefetcher->prefetch_threads);
 }
 
-void* hexe_request_hbw(size_t size, int prioriy) {
-//
-    int chip, core;
-    unsigned long hello;
+void* hexe_request_hbw(size_t size, int priority) {
+    void *map_addr;
 
-   // hello =  tacc_rdtscp(&chip, &core);
-   // printf("have %ld; %d %d\n", hello, chip, core);
-    return NULL;
+
+      map_addr= mmap(prefetcher->cache, size, PROT_READ | PROT_WRITE, MAP_SHARED |MAP_ANON, -1, 0);
+
+    insertList(map_addr, size, priority);
+    return map_addr;
 
 }
 
+int hexe_bind_requested_memory(){
+
+    unsigned long node_mask;
+    sort_memory_list();
+    print_list();
+
+    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
+    get_best_layout(prefetcher->mcdram_memory,prefetcher->mcdram_nodes,  node_mask);
+
+
+}
 static inline int malloc_fake_pool(int n) {
 
     int i;
@@ -426,7 +442,7 @@ int hexe_alloc_pool(size_t size, int n){
     prefetcher->ncaches = n;
     prefetcher->cache_size = total_size;
     prefetcher->cache_pool = (void**)malloc( sizeof(void*) * n * 2);
-
+ 
     node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
     if(!prefetcher->cache_pool)
         return -1;
@@ -440,7 +456,7 @@ int hexe_alloc_pool(size_t size, int n){
     mbind(prefetcher->cache, total_size,  MPOL_INTERLEAVE,
           &node_mask, prefetcher->mcdram_nodes, MPOL_MF_MOVE);
     madvise(prefetcher->cache, total_size, MADV_HUGEPAGE);
-
+    prefetcher->mcdram_memory -= total_size;
     for(i = 0; i<n; i++){
         prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* size];
     }
