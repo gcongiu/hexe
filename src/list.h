@@ -1,30 +1,37 @@
+#include <numa.h>
+#include <numaif.h>
+#include "hexe_intern.h"
+#include <sys/mman.h>
+#include <errno.h>
 struct node {
     void *addr;
-    size_t size;
+     unsigned long long size;
     int priority;
-    int w_p;
+    char location;
     struct node* next;
 };
 
 struct node *head = NULL;
+struct node* pinned = NULL;
 size_t n_elements = 0;
-void insertList(void* addr, size_t size, int priority) {
+void insertList(void* addr, unsigned long long size, int priority) {
 
     struct node *link = (struct node*) malloc(sizeof(struct node));
     link->addr = addr;
     link->size = size;
     link->priority = priority;
     link->next = head;
+    link->location = -1;
+
     head = link;
     n_elements++;
 
 }
 
-//delete a link with given key
+
 struct node* find(void* addr) {
     //start from the first link
     struct node* current = head;
-    struct node* previous = NULL;
 
     //if list is empty
     if(head == NULL) {
@@ -38,20 +45,30 @@ struct node* find(void* addr) {
             return NULL;
         } else {
             //store reference to current
-            previous = current;
             //move to  next link
             current = current->next;
         }
     }
     return current;
 }
-void delete (void *addr){
-    struct node * current = NULL;
-    struct node* previous = NULL;
+struct node* delete_from_list(void *addr){
+    struct node * current = head;
+    struct node *previous = NULL;
 
-    current = find(addr);
+    if(current == NULL)
+        return NULL;
+
+    while((uint64_t)current->addr !=(uint64_t) addr) {
+        //if it is last node
+        if(current->next == NULL) {
+            return NULL;
+        } else {
+            previous = current;
+            current = current->next;
+        }
+    }
     if(!current)
-        return; 
+        return NULL;
     //found
     if(current  ==  head){
         head = head->next;
@@ -60,8 +77,7 @@ void delete (void *addr){
         //bypass
         previous->next = current->next;
     }
-    n_elements--;
-    return;
+    return current;
 
 }
 /* function to swap data of two nodes a and b*/
@@ -72,16 +88,15 @@ void swap(struct node *a, struct node *b)
     tmp.addr = a->addr;
     tmp.size = a->size;
     tmp.priority = a->priority;
-
+    tmp.location = a->location;
     a->addr = b->addr;
     a->size = b->size;
     a->priority = b->priority;
-
+    a->location = b->location;
     b->addr = tmp.addr;
     b->size = tmp.size;
     b->priority = tmp.priority;
-
-
+    b->location - tmp.location;
 }
 /* Bubble sort the given linked lsit */
 void sort_memory_list()
@@ -97,7 +112,8 @@ void sort_memory_list()
     do
     {
         swapped = 0;
-        while (ptr1->next != NULL)
+        ptr1 = head;
+        while (ptr1->next != lptr && ptr1->next !=pinned)
         {
             if (ptr1->size > ptr1->next->size)
             {
@@ -117,19 +133,23 @@ static inline int max (int a, int b)
 
 
 #define K(a,b)  K[(W+1)*(a) +(b)]
-void  get_best_layout(size_t max_size, int fast_nodes, unsigned long node_mask )
+void  get_best_layout(size_t max_size, unsigned long node_mask, unsigned long ddr_node_mask )
 {
     char* is_in;
     int* K;
     int w, i;
     int W;
-    int min = head->size;
+    size_t min;
     int ws[n_elements]; 
     struct node *current = head;
 
+    assert(head);
+    min =  head->size;
+
+
     W = (size_t)max_size/min;
 
-
+    printf("W is %d \t \n", W);
 
     K = (int*)malloc((n_elements+1) * sizeof(int) *(W+1));
     is_in = malloc(n_elements * sizeof(char));
@@ -169,17 +189,27 @@ void  get_best_layout(size_t max_size, int fast_nodes, unsigned long node_mask )
     }
     current = head;
     for(i = 0; i<n_elements; i++) {
-        printf("is in? %p %d\n", current->addr, is_in[i]);
+        errno  = 0;
         if(is_in[i] == 1)
         {
-        mbind(current->addr, current->size,  MPOL_INTERLEAVE,
-          &node_mask, fast_nodes, MPOL_MF_MOVE);
 
-
+        mbind(current->addr, current->size,    MPOL_INTERLEAVE,
+          &node_mask, NUMA_NUM_NODES , 0 );
+        current->location = 1;
+        prefetcher->mcdram_memory-=current->size;
         }
-        current= current->next;
+    else if(current->priority != 0) {
+        current->location = 0;
+         mbind(current->addr, current->size,  MPOL_INTERLEAVE,
+          &ddr_node_mask, NUMA_NUM_NODES, 0);
     }
 
+        madvise(current->addr, current->size, MADV_HUGEPAGE);
+    current= current->next;
+    }
+    n_elements = 0;
+    pinned = head;
+    printf("have %d MB\n mcdram left\n", prefetcher->mcdram_memory/(1024*1024));
 }
 
 
@@ -188,7 +218,7 @@ void print_list()
 
     struct node *ptr = head;
     while(ptr!= NULL) {
-        printf("%d\t %ld \t %p \n", ptr->priority, ptr->size/(1024*1024), ptr->addr);
+        printf("%d\t %ld \t %p \t %d \n", ptr->priority, ptr->size/(1024*1024), ptr->addr, ptr->location);
         ptr=ptr->next;
 
     }

@@ -39,7 +39,7 @@ struct prefetch_thread *pre_thread;
 static inline int copy_continous(void *src, void *dst, size_t size)
 {
 
-#pragma omp parallel num_threads(pre_thread->n_prefetch_threads)
+#pragma omp parallel
     {
         int id = omp_get_thread_num();
         int chunk_size = size/pre_thread->n_prefetch_threads;
@@ -47,9 +47,7 @@ static inline int copy_continous(void *src, void *dst, size_t size)
         if(id == pre_thread->n_prefetch_threads-1){	
             chunk_size +=  size%pre_thread->n_prefetch_threads;
         }
-
         memcpy((char*)dst+offset, (char*)src+offset, chunk_size);
-
     }
 
     return 0;
@@ -124,10 +122,19 @@ static void *exec_prefetch_thread(void *data)
     }
 #endif
 
-
-    /*   pthread_mutex_lock(&thread->mv);
-    */
+#ifdef SLEEP
+       pthread_mutex_lock(&pre_thread->mv);
+#endif
     while (1) {
+#ifdef SLEEP
+      volatile int wake = pre_thread->wakeup;
+        while(wake!=1) {
+            pthread_cond_wait(&pre_thread->cv, &pre_thread->mv);
+            pthread_mutex_unlock(&pre_thread->mv);
+            wake = pre_thread->wakeup;
+        }
+#endif
+
         volatile int done = pre_thread->task_list[pre_thread->current_out].done;
         while (!done) {
             task = &pre_thread->task_list[pre_thread->current_out++];
@@ -343,18 +350,18 @@ inline prefetch_handle_t start_prefetch_noncontinous(void *src_start, void *dst,
 
 inline int prefetch_wakeup(){
 
- //   pthread_mutex_lock(&pre_thread->mv);
+   pthread_mutex_lock(&pre_thread->mv);
     pre_thread->wakeup = 1;
- //   pthread_mutex_unlock(&pre_thread->mv);
-   // pthread_cond_signal(&pre_thread->cv);
+    pthread_mutex_unlock(&pre_thread->mv);
+   pthread_cond_signal(&pre_thread->cv);
 
     return 0;
 }
 
 inline int prefetch_allow_sleep() {
-  // pthread_mutex_lock(&pre_thread->mv);
-    pre_thread->wakeup = 0;
-  // pthread_mutex_unlock(&pre_thread->mv);
+  pthread_mutex_lock(&pre_thread->mv);
+   pre_thread->wakeup = 0;
+   pthread_mutex_unlock(&pre_thread->mv);
 
 }
 

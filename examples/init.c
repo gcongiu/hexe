@@ -8,8 +8,9 @@ int main(void)
     hexe_alloc_pool(4*1024*1024, 32);
     hexe_set_prefetch_threads(4);
     hexe_set_compute_threads(8);
-
+    printf("Here I a \n");
     hexe_start();
+
 
     #pragma omp parallel 
     {

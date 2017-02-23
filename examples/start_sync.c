@@ -20,7 +20,7 @@ int main(void)
     init(data);
     hexe_alloc_pool(sizeof(float)*1024, 2);
 
-    float *field_A = hexe_request_hbw(1024*1024*1024, 2);
+    float *field_A = hexe_request_hbw(NULL, 1024*1024*1024, 2);
     hexe_start();
 
     hexe_start_fetch_continous(data, 1024*sizeof(float), 0);
