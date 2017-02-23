@@ -19,7 +19,7 @@ INC = include/hexe.h\
   	  include/prefetch.h
 
 OBJ = obj/hexe.o\
-	  obj/tests.o 
+	  obj/verify.o 
 
 clean:
 	rm -rf obj/* examples/*.bin
