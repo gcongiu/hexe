@@ -12,7 +12,7 @@
 #include<pthread.h>
 #define ind(y,x) (y)*(size_x+2)+x
 #define max(a,b) ((a)>=(b) ? (a):(b))
-#define CHUNK 128
+#define CHUNK 512
 #define min(a,b)  ((a)<(b) ? (a):(b))
 double fRand(double fMin, double fMax)
 {
@@ -142,17 +142,21 @@ int main (int argc, char *argv[])
     }
 #endif
 
-    fieldA = hexe_request_hbw(NULL, sizeof(double)*sizexy, -1);
-    fieldB = hexe_request_hbw(NULL, sizeof(double)*sizexy, -1);
+    fieldA = hexe_request_hbw(NULL, sizeof(double)*sizexy, 5);
+    fieldB = hexe_request_hbw(NULL, sizeof(double)*sizexy, 5);
 
     hexe_bind_requested_memory(0);
     need_fetch = !(hexe_is_in_hbw (fieldA) && hexe_is_in_hbw(fieldB));
-    if(need_fetch) {
+ 
+         need_fetch = !(hexe_is_in_hbw (fieldA));
+   if(need_fetch) {
         hexe_set_compute_threads(threads);
         hexe_set_prefetch_threads(max(16, (64-threads))); 
         hexe_alloc_pool ((size_x+2)*(CHUNK+2)*sizeof(double), 2);
         hexe_start();
-        printf("here\n");
+
+printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024) );
+
     }
 
     start_aclock(&timer);
@@ -173,10 +177,9 @@ int main (int argc, char *argv[])
         for (k = 1; k<size_y+1; k+= CHUNK) {
             int end = min((k+CHUNK), (size_y));
             if(need_fetch) {
-                printf("min is %d\n",   min(CHUNK, size_y-CHUNK-1));
-                prefetch_size = (size_x+2) * sizeof(double) * min(CHUNK, size_y-CHUNK-1);
+                prefetch_size = (size_x+2) * sizeof(double) * min(CHUNK, (size_y-(k+CHUNK-1)));
                 size_t prefetch_offset = (k+CHUNK-1)*(size_x+2);
-                if(k+CHUNK < size_y) 
+               if(k+CHUNK < size_y) 
                     hexe_start_fetch_continous(fieldA+prefetch_offset, prefetch_size, 1-q);
                 cache = hexe_sync_fetch(q);
                 q=1-q;
