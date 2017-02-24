@@ -163,7 +163,7 @@ void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
     struct node *current = head;
 
     size_t max_size = prefetcher->mcdram_memory;
-
+    int mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
     assert(head);
     min =  head->size;
 
@@ -212,23 +212,22 @@ void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
         errno  = 0;
         if(is_in[i] == 1)
         {
-
             if(current->location != 1)
-                mbind(current->addr, current->size,    MPOL_INTERLEAVE,
+             mbind(current->addr, current->size,    mode,
                         &node_mask, NUMA_NUM_NODES , MPOL_MF_MOVE );
-            current->location = 1;
+         current->location = 1;
             prefetcher->mcdram_memory-=current->size;
         }
         else if(current->priority != 0) {
             if(current->location != 0)
-                mbind(current->addr, current->size,  MPOL_INTERLEAVE,
+                mbind(current->addr, current->size,  mode,
                         &ddr_node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
             current->location = 0;
         }
         else
             current->location = -2; /*bind to all */
 
-        madvise(current->addr, current->size, MADV_HUGEPAGE);
+//        madvise(current->addr, current->size, MADV_HUGEPAGE);
     current= current->next;
     }
     new_elements = 0;

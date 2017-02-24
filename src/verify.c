@@ -71,7 +71,8 @@ int hexe_verify_memory_region(void* addr, size_t size, int flags) {
              * physical memory backing page is not hbw
              */
             if (!hwloc_bitmap_isset(expected_bitmap, nodes[i])) {
-                return -1;
+                printf("I have %d\n", nodes[i]);    
+            return -1;
             }
         }
     }

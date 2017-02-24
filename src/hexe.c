@@ -453,6 +453,8 @@ int hexe_alloc_pool(size_t size, int n){
     int i;
     unsigned long node_mask;
     int nodes = prefetcher->mcdram_nodes + prefetcher->ddr_nodes;
+
+    int mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
     prefetcher->handle = (prefetch_handle_t*)  malloc(sizeof(prefetch_handle_t) * n);;
     memset(prefetcher->handle, 0x0, sizeof(prefetch_handle_t)*n); 
 
@@ -475,7 +477,7 @@ int hexe_alloc_pool(size_t size, int n){
         free(prefetcher->cache_pool);
         return -1;
     }
-   mbind(prefetcher->cache, total_size,   MPOL_INTERLEAVE,
+   mbind(prefetcher->cache, total_size, mode,
           &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
 
     madvise(prefetcher->cache, total_size, MADV_HUGEPAGE);
