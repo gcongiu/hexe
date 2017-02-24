@@ -12,7 +12,7 @@
 #include<pthread.h>
 #define ind(y,x) (y)*(size_x+2)+x
 #define max(a,b) ((a)>=(b) ? (a):(b))
-#define CHUNK 512
+#define CHUNK 1024
 #define min(a,b)  ((a)<(b) ? (a):(b))
 double fRand(double fMin, double fMax)
 {
@@ -48,6 +48,7 @@ int main (int argc, char *argv[])
     int ret;
     int need_fetch;
     size_t prefetch_size;
+
 #ifdef USE_PAPI
     PAPI_event_info_t evinfo[3];
     long long value[3] = {0,0,0};
@@ -148,10 +149,9 @@ int main (int argc, char *argv[])
     hexe_bind_requested_memory(0);
     need_fetch = !(hexe_is_in_hbw (fieldA) && hexe_is_in_hbw(fieldB));
  
-         need_fetch = !(hexe_is_in_hbw (fieldA));
    if(need_fetch) {
         hexe_set_compute_threads(threads);
-        hexe_set_prefetch_threads(max(16, (64-threads))); 
+     	  hexe_set_prefetch_threads(32); 
         hexe_alloc_pool ((size_x+2)*(CHUNK+2)*sizeof(double), 2);
         hexe_start();
 
@@ -161,7 +161,7 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
 
     start_aclock(&timer);
     for(t = 0; t<iter; t++){
-        double *cache;
+        double  *__restrict__ cache;
          need_fetch = !(hexe_is_in_hbw (fieldA));
 
 #ifdef USE_PAPI
@@ -188,7 +188,7 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
                 cache = &fieldA[ind(k-1,0)];
             }
 
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
             for(i = k; i<end; i++) {
                 int l = i - k+1;
                 for(j = 1; j <size_x+1; j++) {

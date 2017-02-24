@@ -227,7 +227,7 @@ void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
         else
             current->location = -2; /*bind to all */
 
-//        madvise(current->addr, current->size, MADV_HUGEPAGE);
+        madvise(current->addr, current->size, MADV_HUGEPAGE);
     current= current->next;
     }
     new_elements = 0;

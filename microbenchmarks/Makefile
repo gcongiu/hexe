@@ -2,7 +2,7 @@ CC = 	icc
 CPP =  icpc
 CFLAGS = -I/home/loden/host_libs/include
 
-CFLAGS =   -O2 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
+CFLAGS =   -O3 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
 		      -I/soft/perftools/tau/papi-knl/include\
 			  -I/home/loden/host_libs/include\
 			 -I/home/loden/hexe_c/include  -qopenmp 
@@ -16,8 +16,11 @@ CLINKFLAGS =	-O2 -fasm-blocks  -g -qopenmp -lnuma  -lhwloc -qopenmpi -L/home/lod
 default: bin/stencil_5pt.bin\
 		bin/stencil_5pt_move_pages.bin\
 		bin/stencil_5pt_copy.bin\
-		bin/stencil_5pt_fetch.bin
-
+		bin/stencil_5pt_fetch.bin\
+		bin/stencil_7pt.bin\
+		bin/stencil_7pt_copy.bin\
+		bin/stencil_7pt_fetch.bin
+ 
 obj/%.o: src/%.c ../libhexeknl.a ../include/hexe.h
 	 $(CC) $(CFLAGS) -c -o $@ $<
 
