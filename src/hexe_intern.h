@@ -1,5 +1,8 @@
 #ifndef _hexe_intern_h_
 #define _hexe_intern_h_
+#include "prefetch_intern.h"
+#include <hwloc.h>
+
 enum ClusterMode
 {
     QUADRANT = 1,
@@ -33,7 +36,7 @@ struct hexe{
     int ddr_nodes;
     int mcdram_nodes;
     size_t mcdram_memory;
-
+    size_t total_mcdram;
 	hwloc_cpuset_t *prefetch_cpusets;
 	hwloc_cpuset_t *compute_cpusets;
 	hwloc_topology_t topology;

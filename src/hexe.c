@@ -151,6 +151,7 @@ static void detect_knl_mode(struct hexe *h)
     }
 
     printf("Have a total of %ld Gbyte hbw memory\n", h->mcdram_memory/(1024*1024*1024));
+    h->total_mcdram = h->mcdram_memory;
     if(h->mcdram_memory > 0)
         h->mcdram_memory -= (512*1024*1024);
 }
@@ -314,12 +315,17 @@ int hexe_finalize()
             free(prefetcher->cache_pool);
     }
     else {
+        printf("a\n");
         finish_thread( );
+        printf("b\n");
         if(prefetcher->cache) 
             hexe_free_pool();
+        printf("c\n");
     }
-    hwloc_topology_destroy(prefetcher->topology);
-    free(prefetcher);
+    printf("d\n");
+//    hwloc_topology_destroy(prefetcher->topology);
+  //  free(prefetcher);
+  
 }
 
 int hexe_start()
@@ -364,23 +370,44 @@ void* hexe_request_hbw2(uint64_t size, int priority) {
 
 }
 
-int hexe_bind_requested_memory(){
+int hexe_bind_requested_memory(int redistribute){
 
     unsigned long node_mask, ddr_mask;
     if(prefetcher->memory_mode == CACHE)
         return 0;
+    if(redistribute) {
+        prefetcher->mcdram_memory= prefetcher->total_mcdram;
+        prefetcher->mcdram_memory-=(prefetcher->cache_size +
+                            1024*1024*512);
+        reset_list();
+
+    }
+
 
    sort_memory_list();
 
    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
    ddr_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
 
-   get_best_layout(prefetcher->mcdram_memory,   node_mask, ddr_mask);
+   get_best_layout(node_mask, ddr_mask);
     print_list();
    return 0;
 
 }
 
+int hexe_change_priority(void* ptr, int priority) {
+
+    struct node* entry = find(ptr);
+    int old;
+    if(prefetcher->memory_mode == CACHE)
+        return 0;
+
+    if(! entry)
+        return -1;
+    old = entry->priority;
+    entry->priority = priority;
+   return 0;
+}
 int hexe_is_in_hbw (void *ptr) {
 
 

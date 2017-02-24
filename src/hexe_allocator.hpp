@@ -31,7 +31,7 @@ namespace hexe
         static HexeDev* h_instance;
     public:
         int  distribute_objects(){
-            return hexe_bind_requested_memory();
+            return hexe_bind_requested_memory(0);
         }
         HexeDev *get_instance()
         {

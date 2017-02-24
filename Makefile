@@ -10,6 +10,7 @@ example: examples/init.bin\
 		 examples/start_sync_strided.bin\
 		 examples/stl.bin
 
+
 all: default  example
 	cp src/hexe_allocator.hpp include/
 

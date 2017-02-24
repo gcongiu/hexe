@@ -17,14 +17,14 @@ int main(void)
 
 
     field_B = hexe_request_hbw(NULL,(size_t)8*1024*1024*1024, 4);
-    
 
-    field_C = hexe_request_hbw(NULL,(size_t)10* 1024*1024*1024, 1);
-    
+
+    field_C = hexe_request_hbw(NULL,(size_t)4* 1024*1024*1024, 1);
+
 
     field_D = hexe_request_hbw(NULL,1024* 1024*1024, 7);
 
-    hexe_bind_requested_memory();
+    hexe_bind_requested_memory(0);
 
 
     is_in = hexe_is_in_hbw (field_A);
@@ -36,7 +36,7 @@ int main(void)
     printf("Hexe binds Field_B  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
 
     is_in = hexe_is_in_hbw (field_C);
-    verify  = hexe_verify_memory_region(field_C, (size_t) 10* 1024*1024*1024 , TOUCH_PAGES);
+    verify  = hexe_verify_memory_region(field_C, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
     printf("Hexe binds Field_C  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
 
     is_in = hexe_is_in_hbw (field_D);
@@ -44,9 +44,39 @@ int main(void)
     printf("Hexe binds Field_D  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
 
 
-    field_D = hexe_request_hbw(NULL, (size_t)1*1024*1024*1024, 7);
+    field_E = hexe_request_hbw(NULL, (size_t)4*1024*1024*1024, 9);
 
-    hexe_bind_requested_memory();
+    hexe_bind_requested_memory(0);
+    is_in = hexe_is_in_hbw (field_E);
+    verify  = hexe_verify_memory_region(field_E, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
+    printf("Hexe binds Field_E  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
+
+    hexe_bind_requested_memory(1);
+    printf("now redistribute \n"); 
+    is_in = hexe_is_in_hbw (field_A);
+    verify  = hexe_verify_memory_region(field_A, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
+    printf("Hexe binds Field_A  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
+
+    is_in = hexe_is_in_hbw (field_B);
+    verify  = hexe_verify_memory_region(field_B, (size_t) 8* 1024*1024*1024 , TOUCH_PAGES);
+    printf("Hexe binds Field_B  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
+
+    is_in = hexe_is_in_hbw (field_C);
+    verify  = hexe_verify_memory_region(field_C, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
+    printf("Hexe binds Field_C  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
+
+    is_in = hexe_is_in_hbw (field_D);
+    verify  = hexe_verify_memory_region(field_D, (size_t) 1024*1024*1024 , TOUCH_PAGES);
+    printf("Hexe binds Field_D  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
+
+    verify  = hexe_verify_memory_region(field_E, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
+    printf("Hexe binds Field_E  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
+
+
+ 
+
+
+
     hexe_free_memory(field_A);
     hexe_free_memory(field_B);
     hexe_free_memory(field_C);

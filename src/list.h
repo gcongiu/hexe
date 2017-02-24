@@ -14,6 +14,7 @@ struct node {
 struct node *head = NULL;
 struct node* pinned = NULL;
 size_t n_elements = 0;
+size_t new_elements = 0;
 void insertList(void* addr, unsigned long long size, int priority) {
 
     struct node *link = (struct node*) malloc(sizeof(struct node));
@@ -25,6 +26,7 @@ void insertList(void* addr, unsigned long long size, int priority) {
 
     head = link;
     n_elements++;
+    new_elements++;
 
 }
 
@@ -77,6 +79,12 @@ struct node* delete_from_list(void *addr){
         //bypass
         previous->next = current->next;
     }
+    if(current) {
+        n_elements --;
+        if(current->location == -1)
+               new_elements -= 1;
+
+    }
     return current;
 
 }
@@ -85,18 +93,21 @@ struct node* delete_from_list(void *addr){
 void swap(struct node *a, struct node *b)
 {
     struct node tmp;
+
     tmp.addr = a->addr;
     tmp.size = a->size;
     tmp.priority = a->priority;
     tmp.location = a->location;
+
     a->addr = b->addr;
     a->size = b->size;
     a->priority = b->priority;
     a->location = b->location;
+
     b->addr = tmp.addr;
     b->size = tmp.size;
     b->priority = tmp.priority;
-    b->location - tmp.location;
+    b->location = tmp.location;
 }
 /* Bubble sort the given linked lsit */
 void sort_memory_list()
@@ -126,14 +137,22 @@ void sort_memory_list()
     }
     while (swapped);
 }
+
+
 static inline int max (int a, int b)
 {
     return a > b ? a:b;
 }
 
+static void reset_list()
+{
+    pinned = NULL;
+    new_elements = n_elements;
+}
+
 
 #define K(a,b)  K[(W+1)*(a) +(b)]
-void  get_best_layout(size_t max_size, unsigned long node_mask, unsigned long ddr_node_mask )
+void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
 {
     char* is_in;
     int* K;
@@ -143,20 +162,22 @@ void  get_best_layout(size_t max_size, unsigned long node_mask, unsigned long dd
     int ws[n_elements]; 
     struct node *current = head;
 
+    size_t max_size = prefetcher->mcdram_memory;
+
     assert(head);
     min =  head->size;
 
 
     W = (size_t)max_size/min;
 
-    printf("W is %d \t \n", W);
+//    printf("W is %d \t \n", W);
 
     K = (int*)malloc((n_elements+1) * sizeof(int) *(W+1));
     is_in = malloc(n_elements * sizeof(char));
     for (w =0; w<=W; w++)
         K(0,w) = 0;
 
-    for (i = 1; i <= n_elements; i++)
+    for (i = 1; i <= new_elements; i++)
     {
         //   current = head;
         int tmp_size =current->size/min;
@@ -172,9 +193,8 @@ void  get_best_layout(size_t max_size, unsigned long node_mask, unsigned long dd
                 K(i,w) = K((i-1),w);
         }
         current = current->next;
-        printf("\n");
     }
-    i = n_elements;
+    i = new_elements;
     w = W;
     while( i> 0 && w >0) {
         if(K(i,w) != K((i-1),w)) {
@@ -188,28 +208,32 @@ void  get_best_layout(size_t max_size, unsigned long node_mask, unsigned long dd
         }
     }
     current = head;
-    for(i = 0; i<n_elements; i++) {
+    for(i = 0; i<new_elements; i++) {
         errno  = 0;
         if(is_in[i] == 1)
         {
 
-        mbind(current->addr, current->size,    MPOL_INTERLEAVE,
-          &node_mask, NUMA_NUM_NODES , 0 );
-        current->location = 1;
-        prefetcher->mcdram_memory-=current->size;
+            if(current->location != 1)
+                mbind(current->addr, current->size,    MPOL_INTERLEAVE,
+                        &node_mask, NUMA_NUM_NODES , MPOL_MF_MOVE );
+            current->location = 1;
+            prefetcher->mcdram_memory-=current->size;
         }
-    else if(current->priority != 0) {
-        current->location = 0;
-         mbind(current->addr, current->size,  MPOL_INTERLEAVE,
-          &ddr_node_mask, NUMA_NUM_NODES, 0);
-    }
+        else if(current->priority != 0) {
+            if(current->location != 0)
+                mbind(current->addr, current->size,  MPOL_INTERLEAVE,
+                        &ddr_node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+            current->location = 0;
+        }
+        else
+            current->location = -2; /*bind to all */
 
         madvise(current->addr, current->size, MADV_HUGEPAGE);
     current= current->next;
     }
-    n_elements = 0;
+    new_elements = 0;
     pinned = head;
-    printf("have %d MB\n mcdram left\n", prefetcher->mcdram_memory/(1024*1024));
+ //   printf("have %d MB\n mcdram left\n", prefetcher->mcdram_memory/(1024*1024));
 }
 
 

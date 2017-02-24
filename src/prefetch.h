@@ -458,16 +458,16 @@ inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_top
 
 inline void finish_thread() {
 
-int out;
+    int out;
 
-       while(out) {
-         out  = pre_thread->open_tasks;
-         };
-         
+    while(out) {
+        out  = pre_thread->open_tasks;
+    };
+
     if(pre_thread->thread)
         pthread_cancel(pre_thread->thread);
     free(pre_thread->task_list);
-   free(pre_thread);
+    free(pre_thread);
 }
 
 #endif
