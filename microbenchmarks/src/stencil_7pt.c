@@ -161,7 +161,7 @@ int main (int argc, char *argv[])
 #endif
 
 
-#pragma omp parallel for
+#pragma omp parallel for private(i,j)
      for(h = 1; h< size_z+1; h++)
      for(i = 1; i<size_y+1; i++) {
          for(j = 1; j <size_x+1; j++) {

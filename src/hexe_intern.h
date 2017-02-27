@@ -24,6 +24,7 @@ enum MemoryMode
 struct hexe{
 	void **cache_pool;
 	void *cache;
+    int *counter;
 	size_t cache_size;
 	int start_id;
 	int ncaches;

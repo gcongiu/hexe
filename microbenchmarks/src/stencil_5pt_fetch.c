@@ -14,6 +14,11 @@
 #define max(a,b) ((a)>=(b) ? (a):(b))
 #define CHUNK 1024
 #define min(a,b)  ((a)<(b) ? (a):(b))
+int id, threadchunk;
+#pragma omp threadprivate(id, threadchunk)
+
+
+
 double fRand(double fMin, double fMax)
 {
     double f = (double)rand() / RAND_MAX;
@@ -174,22 +179,29 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
             prefetch_size = (CHUNK+2)*(size_x+2)*sizeof(double);
             hexe_start_fetch_continous(fieldA, prefetch_size, 0);
         }
-        for (k = 1; k<size_y+1; k+= CHUNK) {
-            int end = min((k+CHUNK), (size_y));
-            if(need_fetch) {
-                prefetch_size = (size_x+2) * sizeof(double) * min(CHUNK, (size_y-(k+CHUNK-1)));
+ int loops = size_y/CHUNK;
+    // printf("lop is %d\n", loops);
+
+#pragma omp parallel private(k) firstprivate(q)
+{
+    id =omp_get_thread_num(); 
+    threadchunk = CHUNK/threads;
+        for (k = 0; k<loops; k+= 1) {
+        int start = 1 +CHUNK*k+threadchunk*id;
+        int end = min((start+threadchunk), (size_y));
+//              printf("from %d to %d\n", start, end);
+           if(need_fetch) {
+                prefetch_size = (size_x+2) * sizeof(double) * min(CHUNK, (size_y-(k+1)*CHUNK+1));
                 size_t prefetch_offset = (k+CHUNK-1)*(size_x+2);
-               if(k+CHUNK < size_y) 
+               if(prefetch_size>0) 
                     hexe_start_fetch_continous(fieldA+prefetch_offset, prefetch_size, 1-q);
                 cache = hexe_sync_fetch(q);
                 q=1-q;
             }
             else {
-                cache = &fieldA[ind(k-1,0)];
+                cache = &fieldA[ind(start-1,0)];
             }
-
-#pragma omp parallel for schedule(static)
-            for(i = k; i<end; i++) {
+            for(i = start; i<end; i++) {
                 int l = i - k+1;
                 for(j = 1; j <size_x+1; j++) {
                     fieldB[ind(i,j)] =
@@ -200,6 +212,7 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
                 }
             }
         }
+}
 #ifndef COPY_DATA
         tmp = fieldB;
         fieldB = fieldA;

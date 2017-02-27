@@ -485,6 +485,7 @@ int hexe_alloc_pool(size_t size, int n){
     for(i = 0; i<n; i++){
         prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* size];
     }
+    prefetcher->counter = malloc(sizeof(int)*prefetcher->ncaches);
    return 0;
 
 }
@@ -518,6 +519,17 @@ int hexe_start_fetch_continous(void *start_addr, size_t size, int idx)
     return 0;
 }
 
+int hexe_start_fetch_continous_taged(void *start_addr, size_t size, int idx, int tag)
+{
+    if(prefetcher->memory_mode == CACHE){
+        prefetcher->cache_pool[idx]= start_addr;
+        return 0;
+    }
+    hexe_sync_fetch(idx);
+    prefetcher->handle[idx] = start_prefetch_continous(start_addr, prefetcher->cache_pool[2*idx], size);
+    prefetcher->counter [idx]= tag;
+    return 0;
+}
 int hexe_start_fetch_strided(void *start_addr, size_t count, size_t block_len, size_t stride,  int idx)
 {
     if(prefetcher->memory_mode == CACHE){
@@ -579,6 +591,20 @@ void *hexe_get_cache_for_write_back(int idx, void *addr) {
 }
 void* hexe_sync_fetch(int idx){
 
+   if(prefetcher->handle[idx]!=0)
+       prefetch_wait(prefetcher->handle[idx]);
+
+    prefetcher->handle[idx] = 0;
+
+    return prefetcher->cache_pool[2*idx];
+}
+static inline void wait_tag(int idx, int tag, int old) {
+    printf("this should not happend %d %d\n", tag, old);
+}
+void* hexe_sync_fetch_taged(int idx, int tag){
+
+    if(prefetcher->counter[idx] != tag)
+        wait_tag(idx, tag, prefetcher->counter[idx]);
    if(prefetcher->handle[idx]!=0)
        prefetch_wait(prefetcher->handle[idx]);
 
