@@ -156,7 +156,7 @@ int main (int argc, char *argv[])
 #endif
 
 
-#pragma omp parallel for
+#pragma omp parallel for private(j)
      for(i = 1; i<size_y+1; i++) {
          for(j = 1; j <size_x+1; j++) {
                 fieldB[ind(i,j)] =

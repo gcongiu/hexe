@@ -315,16 +315,16 @@ int hexe_finalize()
             free(prefetcher->cache_pool);
     }
     else {
-        printf("a\n");
-        finish_thread( );
-        printf("b\n");
+
+	if(prefetcher->is_started)  
+      finish_thread( );
         if(prefetcher->cache) 
             hexe_free_pool();
-        printf("c\n");
+
     }
-    printf("d\n");
-//    hwloc_topology_destroy(prefetcher->topology);
-  //  free(prefetcher);
+
+   hwloc_topology_destroy(prefetcher->topology);
+    free(prefetcher);
   
 }
 
@@ -348,6 +348,7 @@ int hexe_start()
        create_new_thread_with_topo(prefetcher->ncaches, prefetcher->topology, prefetcher->prefetch_cpusets, prefetcher->prefetch_threads);
     else
         create_new_thread(prefetcher->ncaches, prefetcher->prefetch_threads);
+    prefetcher->is_started=1;
 }
 
 void* hexe_request_hbw(void* map_addr, size_t size, int priority) {
@@ -598,13 +599,19 @@ void* hexe_sync_fetch(int idx){
 
     return prefetcher->cache_pool[2*idx];
 }
-static inline void wait_tag(int idx, int tag, int old) {
-    printf("this should not happend %d %d\n", tag, old);
+static inline void wait_tag(int idx, int tag) {
+ volatile int tmp = prefetcher->counter[idx];
+	while(tmp!= tag) {
+
+		tmp = prefetcher->counter[idx];
+
+	}
+	
 }
 void* hexe_sync_fetch_taged(int idx, int tag){
 
     if(prefetcher->counter[idx] != tag)
-        wait_tag(idx, tag, prefetcher->counter[idx]);
+        wait_tag(idx, tag);
    if(prefetcher->handle[idx]!=0)
        prefetch_wait(prefetcher->handle[idx]);
 

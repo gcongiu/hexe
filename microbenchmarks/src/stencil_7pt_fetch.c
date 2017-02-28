@@ -10,7 +10,7 @@
 #include <papi.h>
 #endif
 #include<pthread.h>
-#define CHUNK 64
+#define CHUNK 32
 #define ind(z,y,x) (z*(size_y+2)*(size_x+2)+(y)*(size_x+2)+x)
 
 #define min(a,b)  ((a)<(b) ? (a):(b))
@@ -216,7 +216,7 @@ printf("here pool size is %ld\n", (size_x+2)*(size_z+2)*(CHUNK+2)*sizeof(double)
                 cache = &fieldA[ind((start-1),0,0)];
 
             }
-#pragma omp barrier
+
             for(h = start; h<end; h++){	
                 int l = h - start+1;
 //                printf("l is %d, h is %d id %d, %d - %d\n", l, h, id, start, end);
@@ -282,6 +282,9 @@ printf("here pool size is %ld\n", (size_x+2)*(size_z+2)*(CHUNK+2)*sizeof(double)
     end_aclock(&timer);
 
 #endif
+    hexe_free_memory(fieldA);
+    hexe_free_memory(fieldB);
+ 
  //       return ret;
     printf("res: %d\t %d\t %d\t %4.2f \n",size_x, size_y, iter,  get_seconds(&timer));
     hexe_finalize();

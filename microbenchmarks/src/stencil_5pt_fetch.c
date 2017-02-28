@@ -12,7 +12,7 @@
 #include<pthread.h>
 #define ind(y,x) (y)*(size_x+2)+x
 #define max(a,b) ((a)>=(b) ? (a):(b))
-#define CHUNK 1024
+#define CHUNK 2048
 #define min(a,b)  ((a)<(b) ? (a):(b))
 int id, threadchunk;
 #pragma omp threadprivate(id, threadchunk)
@@ -177,42 +177,47 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
         int q=0;
         if(need_fetch) {
             prefetch_size = (CHUNK+2)*(size_x+2)*sizeof(double);
-            hexe_start_fetch_continous(fieldA, prefetch_size, 0);
+            hexe_start_fetch_continous_taged(fieldA, prefetch_size, 0, 0);
         }
  int loops = size_y/CHUNK;
     // printf("lop is %d\n", loops);
-
-#pragma omp parallel private(k) firstprivate(q)
+if(size_y%CHUNK != 0) loops+=1;
+#pragma omp parallel private(k, i, j, cache) firstprivate(q)
+ {
+	 id =omp_get_thread_num(); 
+	 threadchunk = CHUNK/threads;
+	 for (k = 0; k<loops; k+= 1) {
+		 int start = 1 +CHUNK*k+threadchunk*id;
+		 int end = min((start+threadchunk), (size_y+1));
+//		              printf("from %d to %d\n", start, end);
+		 if(need_fetch) {
+			 prefetch_size = (size_x+2) * sizeof(double) * min((CHUNK+2), max(0, (long long)(size_y-(k+1)*CHUNK+2)));
+			 size_t prefetch_offset = (start+CHUNK-2)*(size_x+2);
+#pragma omp master
 {
-    id =omp_get_thread_num(); 
-    threadchunk = CHUNK/threads;
-        for (k = 0; k<loops; k+= 1) {
-        int start = 1 +CHUNK*k+threadchunk*id;
-        int end = min((start+threadchunk), (size_y));
-//              printf("from %d to %d\n", start, end);
-           if(need_fetch) {
-                prefetch_size = (size_x+2) * sizeof(double) * min(CHUNK, (size_y-(k+1)*CHUNK+1));
-                size_t prefetch_offset = (k+CHUNK-1)*(size_x+2);
-               if(prefetch_size>0) 
-                    hexe_start_fetch_continous(fieldA+prefetch_offset, prefetch_size, 1-q);
-                cache = hexe_sync_fetch(q);
-                q=1-q;
-            }
-            else {
-                cache = &fieldA[ind(start-1,0)];
-            }
-            for(i = start; i<end; i++) {
-                int l = i - k+1;
-                for(j = 1; j <size_x+1; j++) {
-                    fieldB[ind(i,j)] =
-                        0.5*cache[ind(l,j)]+0.5*
-                        (0.1*cache[ind((l+1),j)]+0.1*cache[ind((l-1),j)]+
-                         0.1*cache[ind(l,(j+1))]+0.1*cache[ind(l,(j-1))]);
 
-                }
-            }
-        }
+			 if(prefetch_size>2) 
+				 hexe_start_fetch_continous_taged(fieldA+prefetch_offset, prefetch_size, 1-q, k+1);
 }
+			 cache = hexe_sync_fetch_taged(q,k)+threadchunk*id*(size_x+2);
+			 q=1-q;
+//#pragma omp barrier
+		 }
+		 else {
+			 cache = &fieldA[ind(start-1,0)];
+		 }
+		 for(i = start; i<end; i++) {
+			 int l = i - start+1;
+			 for(j = 1; j <size_x+1; j++) {
+				 fieldB[ind(i,j)] =
+					 0.5*cache[ind(l,j)]+0.5*
+					 (0.1*cache[ind((l+1),j)]+0.1*cache[ind((l-1),j)]+
+					  0.1*cache[ind(l,(j+1))]+0.1*cache[ind(l,(j-1))]);
+
+			 }
+		 }
+	 }
+ }
 #ifndef COPY_DATA
         tmp = fieldB;
         fieldB = fieldA;
@@ -264,13 +269,14 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
 #endif
     //       return ret;
     printf("res: %d\t %d\t %d\t %4.2f \n",size_x, size_y, iter,  get_seconds(&timer));
-    printf("here 1\n");
+
+
+    hexe_free_memory(fieldA);
+    hexe_free_memory(fieldB);
   if(need_fetch)
         hexe_finalize();
 
-    printf("here 2\n");
-    hexe_free_memory(fieldA);
-    hexe_free_memory(fieldB);
+
 #ifdef USE_PAPI
     PAPI_shutdown();
 #endif

@@ -26,12 +26,12 @@ struct hexe{
 	void *cache;
     int *counter;
 	size_t cache_size;
-	int start_id;
 	int ncaches;
 	int prefetch_threads;
     int compute_threads;
     prefetch_handle_t* handle;
     int is_init;
+    int is_started;
     int cluster_mode;
     int memory_mode;
     int ddr_nodes;
