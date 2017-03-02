@@ -2,7 +2,7 @@
 #define HEXE_H
 #include "stddef.h"
 #include "stdlib.h"
-#include <hwloc.h>
+#include "stdint.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,6 +16,13 @@ void* hexe_request_hbw(void* addr, size_t size, int priority);
 void* hexe_request_hbw2(uint64_t  size, int priority); 
 int hexe_verify_memory_region(void* addr, size_t size, int flags);
 void hexe_free_memory(void *ptr);
+void* hexe_alloc_ddr(size_t size );
+void* hexe_alloc_hbw(size_t size );
+void* hexe_calloc_ddr(size_t num, size_t size );
+void* hexe_calloc_hbw(size_t num, size_t size );
+void* hexe_realloc_ddr(void* old,  size_t size );
+void* hexe_realloc_ddr(void* old,  size_t size );
+
 int  hexe_bind_requested_memory(const int redistribute);
 int hexe_change_priority(void* ptr, int priority);
 int hexe_is_in_hbw (void *ptr);

@@ -5,7 +5,8 @@
 int main(void)
 {
     double *field_A, *field_B, *field_C, *field_D, *field_E;
-    int is_in, verify;
+    int *G, *F; 
+   int is_in, verify;
     hexe_init();
     hexe_alloc_pool(4*1024*1024, 32);
     hexe_set_prefetch_threads(4);
@@ -73,7 +74,8 @@ int main(void)
     printf("Hexe binds Field_E  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
 
 
- 
+    G = (void*)hexe_alloc_hbw(1024*1024);
+    F = (void*)hexe_alloc_ddr(1024*1024);
 
 
 
@@ -81,6 +83,10 @@ int main(void)
     hexe_free_memory(field_B);
     hexe_free_memory(field_C);
     hexe_free_memory(field_D);
+    hexe_free_memory(G);
+    hexe_free_memory(F);
+
+
     hexe_finalize();
 
 }

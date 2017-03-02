@@ -15,7 +15,9 @@ struct node *head = NULL;
 struct node* pinned = NULL;
 size_t n_elements = 0;
 size_t new_elements = 0;
-void insertList(void* addr, unsigned long long size, int priority) {
+
+
+struct node* insertList(void* addr, unsigned long long size, int priority) {
 
     struct node *link = (struct node*) malloc(sizeof(struct node));
     link->addr = addr;
@@ -27,7 +29,7 @@ void insertList(void* addr, unsigned long long size, int priority) {
     head = link;
     n_elements++;
     new_elements++;
-
+    return link;
 }
 
 
@@ -162,7 +164,7 @@ void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
     int ws[n_elements]; 
     struct node *current = head;
 
-    size_t max_size = prefetcher->mcdram_memory;
+    size_t max_size = prefetcher->mcdram_avail;
     int mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
     assert(head);
     min =  head->size;
@@ -216,7 +218,7 @@ void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
              mbind(current->addr, current->size,    mode,
                         &node_mask, NUMA_NUM_NODES , MPOL_MF_MOVE );
          current->location = 1;
-            prefetcher->mcdram_memory-=current->size;
+            prefetcher->mcdram_avail-=current->size;
         }
         else if(current->priority != 0) {
             if(current->location != 0)
@@ -232,7 +234,7 @@ void  get_best_layout( unsigned long node_mask, unsigned long ddr_node_mask )
     }
     new_elements = 0;
     pinned = head;
- //   printf("have %d MB\n mcdram left\n", prefetcher->mcdram_memory/(1024*1024));
+ //   printf("have %d MB\n mcdram left\n", prefetcher->mcdram_avail/(1024*1024));
 }
 
 

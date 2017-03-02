@@ -36,8 +36,9 @@ struct hexe{
     int memory_mode;
     int ddr_nodes;
     int mcdram_nodes;
-    size_t mcdram_memory;
+    size_t mcdram_avail;
     size_t total_mcdram;
+    size_t mcdram_per_node[4];
 	hwloc_cpuset_t *prefetch_cpusets;
 	hwloc_cpuset_t *compute_cpusets;
 	hwloc_topology_t topology;

@@ -17,6 +17,7 @@ static unsigned long tacc_rdtscp(int *chip, int *core)
     *core = c & 0xFFF;
     return ((unsigned long)a) | (((unsigned long)d) << 32);;
 }
+
 static void detect_knl_mode(struct hexe *h)
 {
 
@@ -29,9 +30,9 @@ static void detect_knl_mode(struct hexe *h)
     hwloc_topology_init(&h->topology);
     hwloc_topology_load(h->topology);
     root = hwloc_get_root_obj(h->topology);
-    h->mcdram_memory = 0 ;
+    h->mcdram_avail = 0 ;
     memory_mode = hwloc_obj_get_info_by_name(root, "MemoryMode");
-
+    
     if(memory_mode) {
         if(strncmp(memory_mode, "Flat" , sizeof("Flat"))== 0) {
             printf("Flat\n");
@@ -52,8 +53,9 @@ static void detect_knl_mode(struct hexe *h)
         }
     }
     else{
+        printf("Here I am \n");
         h->memory_mode = CACHE;  /*we assume not to have different types */;
-        h->mcdram_memory = 0;
+        h->mcdram_avail = 0;
         }
 
     cluster_mode = hwloc_obj_get_info_by_name(root, "ClusterMode");
@@ -119,7 +121,7 @@ static void detect_knl_mode(struct hexe *h)
             else{
                 h->mcdram_sets[i/2]=obj->nodeset; 
                 hwloc_bitmap_or(h->all_mcdram, obj->nodeset, h->all_mcdram);
-                h->mcdram_memory += obj->memory.total_memory;
+                h->mcdram_avail += obj->memory.total_memory;
             }
         }
 
@@ -150,10 +152,11 @@ static void detect_knl_mode(struct hexe *h)
 
     }
 
-    printf("Have a total of %ld Gbyte hbw memory\n", h->mcdram_memory/(1024*1024*1024));
-    h->total_mcdram = h->mcdram_memory;
-    if(h->mcdram_memory > 0)
-        h->mcdram_memory -= (512*1024*1024);
+    printf("Have a total of %ld Gbyte hbw memory\n", h->mcdram_avail/(1024*1024*1024));
+
+    h->total_mcdram = h->mcdram_avail;
+    if(h->mcdram_avail > 0)
+        h->mcdram_avail -= (512*1024*1024);
 }
 static int _hexe_find_sibling_knl(int core_id) {
 
@@ -205,7 +208,7 @@ static inline long hexe_distribute_compute_only()
     for (i = 0; i<prefetcher->compute_threads;i++) {
           prefetcher->compute_cpusets[i] =hwloc_bitmap_alloc();
           hwloc_bitmap_set(prefetcher->compute_cpusets[i],current_core); 
-        current_core += 16;
+        current_core += cores/4;
         if(current_core >= cores)
             current_core = current_core%cores+add;
     }
@@ -248,7 +251,7 @@ static int hexe_distribute_threads_knl()
         for (i = 0; i<prefetcher->compute_threads;i++) {
             tmp = hwloc_get_obj_by_type(prefetcher->topology, HWLOC_OBJ_CORE, current_core);
             prefetcher->compute_cpusets[i] = hwloc_bitmap_dup(tmp->cpuset);
-            current_core += 16;
+            current_core +=cores/4;
             if(current_core >= cores)
                 current_core = current_core%cores+add;
 
@@ -257,7 +260,7 @@ static int hexe_distribute_threads_knl()
     for (i=0; i<prefetcher->prefetch_threads;i++) {
         tmp = hwloc_get_obj_by_type(prefetcher->topology, HWLOC_OBJ_CORE, current_core);
         prefetcher->prefetch_cpusets[i] = hwloc_bitmap_dup(tmp->cpuset);
-        current_core += 16;
+        current_core += cores/4;
         if(current_core >= cores)
             current_core = current_core%cores+add;
 
@@ -354,7 +357,7 @@ int hexe_start()
 void* hexe_request_hbw(void* map_addr, size_t size, int priority) {
 
   if(map_addr == NULL)
-      map_addr= mmap(prefetcher->cache, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+      map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
 
       insertList(map_addr, size, priority);
     return map_addr;
@@ -364,7 +367,7 @@ void* hexe_request_hbw2(uint64_t size, int priority) {
 
     void *map_addr;
 
-      map_addr= mmap(prefetcher->cache, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+      map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
 
       insertList(map_addr, (unsigned long long) size , priority);
     return map_addr;
@@ -377,8 +380,8 @@ int hexe_bind_requested_memory(int redistribute){
     if(prefetcher->memory_mode == CACHE)
         return 0;
     if(redistribute) {
-        prefetcher->mcdram_memory= prefetcher->total_mcdram;
-        prefetcher->mcdram_memory-=(prefetcher->cache_size +
+        prefetcher->mcdram_avail= prefetcher->total_mcdram;
+        prefetcher->mcdram_avail-=(prefetcher->cache_size +
                             1024*1024*512);
         reset_list();
 
@@ -428,10 +431,170 @@ void hexe_free_memory(void *ptr) {
             return;
     munmap(entry->addr, entry->size);
     if(entry->location == 1) {
-        prefetcher->mcdram_memory+= entry->size;
+        prefetcher->mcdram_avail+= entry->size;
 
     }
 
+}
+
+void* hexe_alloc_hbw(size_t size )
+{
+  void *map_addr;
+  unsigned long node_mask;
+  int mode;
+   struct node* entry;
+  if( !hexe_is_init() )
+    hexe_init();
+   mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
+   map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+   mbind(map_addr, size, mode,
+          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+    madvise(map_addr, size, MADV_HUGEPAGE);
+    entry = insertList(map_addr, size, 100); 
+    entry->location =1;
+    prefetcher->mcdram_avail -= size;
+   return map_addr;
+}
+
+void* hexe_calloc_hbw(size_t num, size_t el_size )
+{
+    void *map_addr;
+    unsigned long node_mask;
+    int mode;
+    struct node* entry;
+    size_t size = num * el_size;
+    if( !hexe_is_init() )
+        hexe_init();
+    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
+    map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+    mbind(map_addr, size, mode,
+            &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+    madvise(map_addr, size, MADV_HUGEPAGE);
+    entry = insertList(map_addr, size, 100); 
+    entry->location =1;
+    prefetcher->mcdram_avail -= size;
+    memset(map_addr, 0, size); 
+    return map_addr;
+}
+
+
+void* hexe_realloc_hbw(void* old,  size_t size )
+{
+    void *map_addr;
+    unsigned long node_mask;
+    struct node *entry;
+    int mode;
+    if( !hexe_is_init() )
+        hexe_init();
+
+    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
+    map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+    mbind(map_addr, size, mode,
+            &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+
+
+    entry = insertList(map_addr, size, 99); 
+    entry->location =1;
+
+    madvise(map_addr, size, MADV_HUGEPAGE);
+    entry = delete_from_list(old);
+    if(entry){
+        memcpy(map_addr, old, (size>entry->size)? entry->size:size);
+        munmap(entry->addr, entry->size);
+        prefetcher->mcdram_avail += entry->size;
+        free(entry);
+    }
+
+    prefetcher->mcdram_avail -= size;
+
+    return map_addr;
+}
+
+
+
+void* hexe_alloc_ddr(size_t size )
+{
+  void *map_addr;
+  unsigned long node_mask;
+  int mode;
+
+  struct node *entry;
+  if( !hexe_is_init() )
+    hexe_init();
+    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
+   map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+   mbind(map_addr, size, mode,
+          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+
+    madvise(map_addr, size, MADV_HUGEPAGE);
+    entry = insertList(map_addr, size, -1); 
+    entry->location =0;
+ 
+   return map_addr;
+}
+
+
+void* hexe_calloc_ddr(size_t num, size_t el_size)
+{
+    void *map_addr;
+    unsigned long node_mask;
+    int mode;
+    struct node *entry;
+    size_t size = num * el_size;
+
+    if( !hexe_is_init() )
+        hexe_init();
+    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
+    map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+    mbind(map_addr, size, mode,
+            &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+
+    madvise(map_addr, size, MADV_HUGEPAGE);
+    entry = insertList(map_addr, size, -1); 
+    entry->location =0;
+    memset(map_addr, 0, size);
+    return map_addr;
+}
+
+void* hexe_realloc_ddr(void* old,  size_t size )
+{
+  void *map_addr;
+  unsigned long node_mask;
+  struct node *entry;
+  int mode;
+  if( !hexe_is_init() )
+    hexe_init();
+
+    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
+   map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+   mbind(map_addr, size, mode,
+          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+
+
+    entry = insertList(map_addr, size, -1); 
+    entry->location =1;
+ 
+    madvise(map_addr, size, MADV_HUGEPAGE);
+    entry = delete_from_list(old);
+    if(entry){
+        memcpy(map_addr, old, (size>entry->size)? entry->size:size);
+        munmap(entry->addr, entry->size);
+        free(entry);
+    }
+
+   return map_addr;
 }
 
 static inline int malloc_fake_pool(int n) {
@@ -482,7 +645,7 @@ int hexe_alloc_pool(size_t size, int n){
           &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
 
     madvise(prefetcher->cache, total_size, MADV_HUGEPAGE);
-    prefetcher->mcdram_memory -= total_size;
+    prefetcher->mcdram_avail -= total_size;
     for(i = 0; i<n; i++){
         prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* size];
     }

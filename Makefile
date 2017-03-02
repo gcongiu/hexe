@@ -2,7 +2,8 @@ CC = 	icc
 CPP =  icpc
 CFLAGS = -I/home/loden/host_libs/include
 
-default: libhexeknl.a
+default: libhexeknl.a\
+		 lib/libhexe.so
 
 example: examples/init.bin\
 		 examples/allocate.bin\
@@ -15,7 +16,7 @@ all: default  example
 	cp src/hexe_allocator.hpp include/
 
 SRC = src/hexe.c\
-	 src/prefetch.c
+      src/verify.c
 INC = include/hexe.h\
   	  include/prefetch.h
 
@@ -36,8 +37,11 @@ LIBS =  -qopenmp -lpapi -L/soft/perftools/tau/papi-knl/lib/
 
 CLINKFLAGS =	-O2 -fasm-blocks  -g -qopenmp -lnuma  -lhwloc -qopenmpi -L/home/loden/host_libs/lib/ 
 
+lib/libhexe.so: $(OBJ) 
+	$(CC) -shared -Wl,-soname,libhexe.so.1  -o $@  $(OBJ) -lc
+
 obj/%.o: src/%.c src/prefetch.h src/list.h
-	 $(CC) $(CFLAGS) -c -o $@ $<
+	 $(CC) -fPIC $(CFLAGS) -c -o $@ $<
 
 examples/%.bin: examples/%.o  
 	$(CC) $ $(CLINKFLAGS) -o $@ $<  libhexeknl.a  
