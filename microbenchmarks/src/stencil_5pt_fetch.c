@@ -166,6 +166,7 @@ printf("here pool size is %ld\n", (size_x+2)*(CHUNK+2)*sizeof(double)/(1024*1024
 
     start_aclock(&timer);
     for(t = 0; t<iter; t++){
+	printf("t is %d\n", t);
         double  *__restrict__ cache;
          need_fetch = !(hexe_is_in_hbw (fieldA));
 

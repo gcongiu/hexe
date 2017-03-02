@@ -10,7 +10,7 @@
 #include <papi.h>
 #endif
 #include<pthread.h>
-#define CHUNK 32
+#define CHUNK 96
 #define ind(z,y,x) (z*(size_y+2)*(size_x+2)+(y)*(size_x+2)+x)
 
 #define min(a,b)  ((a)<(b) ? (a):(b))
@@ -168,7 +168,7 @@ int main (int argc, char *argv[])
         hexe_alloc_pool ((size_x+2)*(size_y+2)*(CHUNK+2)*sizeof(double), 2);
         hexe_start();
 
-printf("here pool size is %ld\n", (size_x+2)*(size_z+2)*(CHUNK+2)*sizeof(double)/(1024*1024) );
+printf("here pool size is %ld\n", (size_x+2)*(size_y+2)*(CHUNK+2)*sizeof(double)/(1024*1024) );
 
     }
 
