@@ -10,10 +10,11 @@
 #include <papi.h>
 #endif
 #include<pthread.h>
-#define CHUNK 96
+#define CHUNK 32
 #define ind(z,y,x) (z*(size_y+2)*(size_x+2)+(y)*(size_x+2)+x)
 
 #define min(a,b)  ((a)<(b) ? (a):(b))
+#define max(a,b)  ((a)>=(b) ? (a):(b))
 int id, threadchunk;
 #pragma omp threadprivate(id, threadchunk)
 
@@ -40,8 +41,7 @@ void init_0(double* in, int x, int y) {
 int main (int argc, char *argv[])
 {
     size_t size_x, size_y, size_z,  sizexyz;
-    size_t prefetch_size, prefetch_offset;
-    double* __restrict__ cache;
+//    size_t prefetch_size, prefetch_offset;
     double* __restrict__ fieldA;
     double* __restrict__ fieldB;
     double* tmp;
@@ -176,24 +176,27 @@ printf("here pool size is %ld\n", (size_x+2)*(size_y+2)*(CHUNK+2)*sizeof(double)
  
  start_aclock(&timer);
  for(t = 0; t<iter; t++){
- need_fetch = !(hexe_is_in_hbw (fieldA)); 
+
 #ifdef USE_PAPI
 #pragma omp parallel
 	 if(t == 2)
 		 PAPI_start (EventSet);//= PAPI_OK)
 #endif
-	int q = 0;
-    if(need_fetch) {
-        prefetch_size = (CHUNK+2)*(size_x+2)*(size_y+2)*sizeof(double);
-        hexe_start_fetch_continous_taged(fieldA, prefetch_size, 0,0);
-    }
-
 
     int loops = size_z/CHUNK;
     // printf("lop is %d\n", loops);
-
-#pragma omp parallel private(k, cache, h,i,j) firstprivate(q)
+#pragma omp parallel private(k, h,i,j)
     {
+	int  need_fetch = !(hexe_is_in_hbw (fieldA)); 
+	int q = 0;
+
+        double* __restrict__ cache;
+#pragma omp master 
+    if(need_fetch) {
+        size_t prefetch_size = (CHUNK+2)*(size_x+2)*(size_y+2)*sizeof(double);
+        hexe_start_fetch_continous_taged(fieldA, prefetch_size, 0,0);
+    }
+
         id =omp_get_thread_num(); 
         threadchunk = CHUNK/threads;
         for (k = 0; k<loops; k++) {
@@ -201,37 +204,37 @@ printf("here pool size is %ld\n", (size_x+2)*(size_y+2)*(CHUNK+2)*sizeof(double)
             int end = min((start+threadchunk), (size_z+1));
             //              printf("from %d to %d\n", start, end);
             if(need_fetch) {
-                prefetch_size = (size_x+2) * (size_y+2) * sizeof(double) * min((CHUNK+2), (size_z-(k+1)*CHUNK+1));
-                size_t prefetch_offset = (start+CHUNK-1)*(size_x+2)*(size_y+2);
-#pragma omp master
-                {
-                    //            printf("start %d, size %d \n", start,  min((CHUNK+2), (size_z-(k+1)*CHUNK+1))); 
-                    if(prefetch_size>0) 
-                        hexe_start_fetch_continous_taged(fieldA+prefetch_offset, prefetch_size, 1-q, k+1);
-                }   
-                cache = hexe_sync_fetch_taged(q,k)+threadchunk*k*(size_x+2)*(size_y+2);
-                q=1-q;
-            }
-            else {
-                cache = &fieldA[ind((start-1),0,0)];
+#pragma omp masteri
+            {
+			    size_t prefetch_offset = (start+CHUNK-1)*(size_x+2)*(size_y+2);
+			    size_t prefetch_size = (size_x+2)* (size_y+2) * sizeof(double) * min((CHUNK+2), max(0, (long long)(size_z-(k+1)*CHUNK+2)));
+			    //            printf("start %d, size %d \n", start,  min((CHUNK+2), (size_z-(k+1)*CHUNK+1))); 
+			    if(prefetch_size>2) 
+				    hexe_start_fetch_continous_taged(fieldA+prefetch_offset, prefetch_size, 1-q, k+1);
+		    }   
+		    cache = hexe_sync_fetch_taged(q,k)+threadchunk*id*(size_x+2)*(size_y+2);
+		    q=1-q;
+	    }
+	    else {
+		    cache = &fieldA[ind((start-1),0,0)];
 
-            }
+	    }
 
-            for(h = start; h<end; h++){	
-                int l = h - start+1;
-//                printf("l is %d, h is %d id %d, %d - %d\n", l, h, id, start, end);
-                for(i = 1; i<size_y+1; i++) {
-                    for(j = 1; j <size_x+1; j++) {
-                        fieldB[ind(h,i,j)] =
-                            0.5*cache[ind(l,i,j)]+0.5*
-                            (0.1*cache[ind(l,(i+1),j)]+0.1*cache[ind(l,(i-1),j)]+
-                             0.1*cache[ind(l,i,(j+1))]+0.1*cache[ind(l,i,(j-1))]+
-                             0.1*cache[ind((l+1),i, j)]+ 0.1*cache[ind((l-1),i,j)] )  ;
+	    for(h = start; h<end; h++){	
+		    int l = h - start+1;
+			    //                printf("l is %d, h is %d id %d, %d - %d\n", l, h, id, start, end);
+			    for(i = 1; i<size_y+1; i++) {
+				    for(j = 1; j <size_x+1; j++) {
+					    fieldB[ind(h,i,j)] =
+						    0.5*cache[ind(l,i,j)]+0.5*
+						    (0.1*cache[ind(l,(i+1),j)]+0.1*cache[ind(l,(i-1),j)]+
+						     0.1*cache[ind(l,i,(j+1))]+0.1*cache[ind(l,i,(j-1))]+
+						     0.1*cache[ind((l+1),i, j)]+ 0.1*cache[ind((l-1),i,j)] )  ;
 
-                    }
-                }
-            }
-        }
+				    }
+			    }
+		    }
+	    }
     }
 #ifndef COPY_DATA 
     tmp = fieldB;
