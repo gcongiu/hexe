@@ -2,17 +2,19 @@
 #include <stdlib.h>
 #include <hexe.h>
 #include <omp.h>
+
+
 int main(void)
 {
     double *field_A, *field_B, *field_C, *field_D, *field_E;
     int *G, *F; 
    int is_in, verify;
     hexe_init();
-    hexe_alloc_pool(4*1024*1024, 32);
-    hexe_set_prefetch_threads(4);
-    hexe_set_compute_threads(8);
+//    hexe_alloc_pool(4*1024*1024, 32);
+//    hexe_set_prefetch_threads(4);
+//    hexe_set_compute_threads(8);
 
-    hexe_start();
+  //  hexe_start();
 
     field_A = hexe_request_hbw(NULL, (size_t)4* 1024*1024*1024, 5);
 
@@ -52,7 +54,7 @@ int main(void)
     verify  = hexe_verify_memory_region(field_E, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
     printf("Hexe binds Field_E  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
 
-    hexe_bind_requested_memory(1);
+ //   hexe_bind_requested_memory(1);
     printf("now redistribute \n"); 
     is_in = hexe_is_in_hbw (field_A);
     verify  = hexe_verify_memory_region(field_A, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
@@ -79,14 +81,15 @@ int main(void)
 
 
 
-    hexe_free_memory(field_A);
-    hexe_free_memory(field_B);
+   hexe_free_memory(field_A);
+
+   hexe_free_memory(field_B);
     hexe_free_memory(field_C);
     hexe_free_memory(field_D);
     hexe_free_memory(G);
-    hexe_free_memory(F);
+   hexe_free_memory(F);
 
 
-    hexe_finalize();
+//    hexe_finalize();
 
 }

@@ -47,6 +47,13 @@ struct prefetch_task{
     prefetch_handle_t handle;
 };
 
+struct copy_args {
+    size_t size;
+    void *to;
+    void *from;
+};
+
+
 struct prefetch_thread{
     struct prefetch_task *task_list;
     int current_in;
@@ -65,5 +72,6 @@ struct prefetch_thread{
     hwloc_obj_t *roots;
     unsigned int nroots;
     int n_prefetch_threads;
+    struct copy_args *args; 
 };
 #endif

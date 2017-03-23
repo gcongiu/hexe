@@ -12,16 +12,16 @@ extern "C" {
 }
 
 
-namespace hexe  
+namespace hexe 
 {
-
-
 
   class HexeDev {
     private:
         HexeDev() {
             if(!hexe_is_init())
                 hexe_init();
+                hexe_set_prefetch_threads(0);
+                hexe_set_compute_threads(64);
             current_priority = 0;
         }
         ~HexeDev() {
@@ -106,8 +106,8 @@ namespace hexe
                 pointer allocate (size_type num, const void* = 0) {
                     // print message and allocate memory with global new
                     uint64_t alloc_size = num * sizeof(T);
-                    std::cout <<"allocate " << num << " elements with " << hexe_p->get_instance()->get_priority()<< " " <<alloc_size << "\n";
-                    pointer ret = (pointer) hexe_request_hbw2((uint64_t)alloc_size, hexe_p->get_instance()->get_priority());
+                //    std::cout <<"allocate " << num << " elements with " << hexe_p->get_instance()->get_priority()<< " " <<alloc_size << "\n";
+                    pointer ret = (pointer) hexe_request_hbw(NULL, (uint64_t)alloc_size, hexe_p->get_instance()->get_priority());
 
                     return ret;
                 }
@@ -151,7 +151,8 @@ hexe::HexeDev *h_p;
   name.reserve(size);
 
 #define hexe_distribute_objects\
-  h_p->get_instance()->distribute_objects(); 
+  h_p->get_instance()->distribute_objects();\
+  hexe_start(); 
 
 #define hexe_verify(P)\
     P.get_allocator().verify(P.capacity(), (&P[0]))

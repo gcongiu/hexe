@@ -22,14 +22,15 @@ int main(void)
 
     float *field_A = hexe_request_hbw(NULL, 1024*1024*1024, 2);
     hexe_start();
-
-    hexe_start_fetch_continous(data, 1024*sizeof(float), 0);
     #pragma omp parallel for 
     for (i = 0; i< 1024*1024 *128; i++) {
         field_A[i] = (float) i/2.34;
 
     }
-    cache =(float*) hexe_sync_fetch(0);
+ 
+
+    hexe_start_fetch_continous(data, 1024*sizeof(float), 0);
+   cache =(float*) hexe_sync_fetch(0);
     printf("have here %f %f %f \n", cache[0], data[0], field_A[12]);
     cache = hexe_get_cache_for_write_back(1, &data[1024]);
     cache[0] = 1024.434;

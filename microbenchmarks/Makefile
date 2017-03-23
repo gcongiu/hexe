@@ -2,16 +2,15 @@ CC = 	icc
 CPP =  icpc
 CFLAGS = -I/home/loden/host_libs/include
 
-CFLAGS =   -O3 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
+CFLAGS =   -O2 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
 		      -I/soft/perftools/tau/papi-knl/include\
-			  -I/home/loden/host_libs/include\
 			 -I/home/loden/hexe_c/include  -qopenmp 
 
 CFLAGS  += -I../include/
 
 LIBS =  -qopenmp -lpapi -L/soft/perftools/tau/papi-knl/lib/
 
-CLINKFLAGS =	-O2 -fasm-blocks  -g -qopenmp -lnuma  -lhwloc -qopenmpi -L/home/loden/host_libs/lib/ 
+CLINKFLAGS =	-O2 -fasm-blocks  -g -qopenmp -lnuma  -lhwloc -qopenmp -L/home/loden/host_libs/lib/ 
 
 default: bin/stencil_5pt.bin\
 		bin/stencil_5pt_move_pages.bin\

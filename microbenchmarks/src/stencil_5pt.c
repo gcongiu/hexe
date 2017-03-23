@@ -1,28 +1,24 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
+
 #include "timer.h"
-#include <omp.h>
-#include <xmmintrin.h>
-#include <sys/mman.h>
 #include <hexe.h>
 #ifdef USE_PAPI
 #include <papi.h>
 #endif
-#include<pthread.h>
+
 #define ind(y,x) (y)*(size_x+2)+x
 
 double fRand(double fMin, double fMax)
 {
-    double f = (double)rand() / RAND_MAX;
+    double f = (double)23423.44 / RAND_MAX;
     return fMin + f * (fMax - fMin);
 }
 
-void init(double* in, int x, int y) {
+void init(double* in, size_t x, size_t y) {
     int i,j;
+#pragma omp parallel for
     for(i = 0; i< y; i++)
-        for(j = 1; j < x; j++)
-            in[i*x+y] = fRand(0.0, 5.0);
+        for(j = 0; j < x; j++)
+            in[i*x+j] = fRand(0.0, 5.0);
 }
 void init_0(double* in, int x, int y) {
     int i,j;
@@ -97,10 +93,11 @@ int main (int argc, char *argv[])
     sizexy = (size_y+2)*(size_x+2);
     printf("Calculate a stencil for a matrix of size %dX%d for %d iterations\n",
             size_x, size_y,iter);
-    hexe_set_compute_threads(threads);
+
    hexe_set_prefetch_threads(0);
-     hexe_start();
-    omp_set_num_threads(threads);
+    hexe_set_compute_threads(threads);
+    hexe_start();
+
 
 #ifdef USE_PAPI
 
@@ -145,6 +142,9 @@ int main (int argc, char *argv[])
     fieldB = hexe_request_hbw(NULL, sizeof(double)*sizexy, 5);
 
      hexe_bind_requested_memory(0);
+      init(fieldA, size_x, size_y);
+     init(fieldB, size_x, size_y);
+    printf("init done\n");
 
  start_aclock(&timer);
  for(t = 0; t<iter; t++){

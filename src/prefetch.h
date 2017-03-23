@@ -6,6 +6,7 @@
 #include <sched.h> 
 #include "prefetch_intern.h"
 
+int count = 0;
 
 inline int lock(uint32_t * log)
 {
@@ -38,7 +39,7 @@ struct prefetch_thread *pre_thread;
 
 static inline int copy_continous(void *src, void *dst, size_t size)
 {
-
+    count ++;
 #pragma omp parallel
     {
         int id = omp_get_thread_num();
@@ -47,8 +48,22 @@ static inline int copy_continous(void *src, void *dst, size_t size)
         if(id == pre_thread->n_prefetch_threads-1){	
             chunk_size +=  size%pre_thread->n_prefetch_threads;
         }
+/*        int i;
+         struct timeval tv;
+        time_t f1,f2;
+        time_t delta = 0;
+            gettimeofday(&tv, NULL); 
+            f1 = tv.tv_usec;
+*/
         memcpy((char*)dst+offset, (char*)src+offset, chunk_size);
+/*        for(i=0; i<10000; i++){
+            gettimeofday(&tv, NULL); 
+            f2 = tv.tv_usec;
+            delta = f2-f1;
+        //    f1 =  f2;
     }
+        printf("delta is %d\n", delta);
+  */     }
 
     return 0;
 }
@@ -114,8 +129,7 @@ static void *exec_prefetch_thread(void *data)
         int id = omp_get_thread_num();
         if(pre_thread->init == 0 && pre_thread->cpusets) {
             hwloc_set_cpubind    (pre_thread->topology,pre_thread->cpusets[id], HWLOC_CPUBIND_THREAD);
-
-        }
+    }
 
 #pragma omp master
         pre_thread->init = 1;
@@ -142,7 +156,7 @@ static void *exec_prefetch_thread(void *data)
                 pre_thread->current_out = 0;
             switch (task->task) {
             case (FETCH_CONTIG):
-                copy_continous(task->kind.continous.source, task->dest, task->kind.continous.size);
+                 copy_continous(task->kind.continous.source, task->dest, task->kind.continous.size);
                 break;
             case (FETCH_STRIDED):
                 copy_strided2continous(task->kind.strided.source, task->dest, task->kind.strided.count, task->kind.strided.block_len, task->kind.strided.stride);
@@ -459,11 +473,11 @@ inline prefetch_thread_t create_new_thread_with_topo(int queue_length, hwloc_top
 inline void finish_thread() {
 
     int out;
-
+    
     while(out) {
         out  = pre_thread->open_tasks;
     };
-
+    printf("out is %d\n", count);
     if(pre_thread->thread)
         pthread_cancel(pre_thread->thread);
     free(pre_thread->task_list);

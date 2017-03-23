@@ -1,7 +1,7 @@
 #include <numa.h>
 #include <numaif.h>
 #include "hexe_intern.h"
-#include "hexe.h"
+#define TOUCH_PAGES 0x1
 
 static inline void hbw_touch_page(void* addr)
 {
@@ -19,7 +19,7 @@ int hexe_verify_memory_region(void* addr, size_t size, int flags) {
     if (addr == NULL || size == 0 || flags & ~TOUCH_PAGES) {
         return EINVAL;
     }
-    if(prefetcher->memory_mode == CACHE)
+    if(mem_manager->memory_mode == CACHE)
         return 0;
     /*
      * 4KB is the smallest pagesize. When pagesize is bigger, pages are verified more than once
@@ -34,7 +34,7 @@ int hexe_verify_memory_region(void* addr, size_t size, int flags) {
 
     char *end = addr + size;
     char *aligned_beg = (char*)((uintptr_t)addr & page_mask);
-    hwloc_bitmap_t  expected_bitmap = prefetcher->all_mcdram;
+    hwloc_bitmap_t  expected_bitmap = mem_manager->all_mcdram;
 
     while(aligned_beg < end) {
         int nodes[block_size];
@@ -71,7 +71,6 @@ int hexe_verify_memory_region(void* addr, size_t size, int flags) {
              * physical memory backing page is not hbw
              */
             if (!hwloc_bitmap_isset(expected_bitmap, nodes[i])) {
-                printf("I have %d\n", nodes[i]);    
             return -1;
             }
         }

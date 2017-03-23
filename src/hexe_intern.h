@@ -2,6 +2,10 @@
 #define _hexe_intern_h_
 #include "prefetch_intern.h"
 #include <hwloc.h>
+typedef  uint64_t prefetch_handle_t;
+typedef  uint64_t prefetch_thread_t;
+
+
 
 enum ClusterMode
 {
@@ -21,7 +25,7 @@ enum MemoryMode
 };
 
 
-struct hexe{
+struct hexe_prefetcher{
 	void **cache_pool;
 	void *cache;
     int *counter;
@@ -30,8 +34,12 @@ struct hexe{
 	int prefetch_threads;
     int compute_threads;
     prefetch_handle_t* handle;
-    int is_init;
     int is_started;
+	hwloc_cpuset_t *prefetch_cpusets;
+	hwloc_cpuset_t *compute_cpusets;
+};
+
+struct hexe_malloc {
     int cluster_mode;
     int memory_mode;
     int ddr_nodes;
@@ -39,18 +47,23 @@ struct hexe{
     size_t mcdram_avail;
     size_t total_mcdram;
     size_t mcdram_per_node[4];
-	hwloc_cpuset_t *prefetch_cpusets;
-	hwloc_cpuset_t *compute_cpusets;
+
 	hwloc_topology_t topology;
-    hwloc_bitmap_t *ddr_sets;
-    hwloc_bitmap_t *mcdram_sets;
+    unsigned long *ddr_sets;
+    unsigned long *mcdram_sets;
     hwloc_nodeset_t all_ddr;
     hwloc_nodeset_t all_mcdram;
+    struct bitmask* ddr_bitmask;
+    struct bitmask* mcdram_bitmask;
 
+    int is_init;
 };
 
+extern struct hexe_malloc *mem_manager;
 
+extern struct hexe_prefetcher *prefetcher;
 
-struct hexe *prefetcher;
+int hexe_distribute_threads_knl();
+
 
 #endif

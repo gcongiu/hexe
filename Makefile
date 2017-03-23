@@ -3,10 +3,13 @@ CPP =  icpc
 CFLAGS = -I/home/loden/host_libs/include
 
 default: libhexeknl.a\
-		 lib/libhexe.so
+		 lib/libhexe.so\
+		 libhexemalloc.a\
+		 lib/libhexemalloc.so
 
 example: examples/init.bin\
 		 examples/allocate.bin\
+		 examples/allocate2.bin\
 		 examples/start_sync.bin\
 		 examples/start_sync_strided.bin\
 		 examples/stl.bin
@@ -15,47 +18,54 @@ example: examples/init.bin\
 all: default  example
 	cp src/hexe_allocator.hpp include/
 
-SRC = src/hexe.c\
-      src/verify.c
-INC = include/hexe.h\
-  	  include/prefetch.h
+OBJ = obj/hexe_omp.o obj/verify_omp.o
 
-OBJ = obj/hexe.o\
-	  obj/verify.o 
+OBJ_MALLOC = obj/hexe.o obj/verify.o
+
 
 clean:
 	rm -rf obj/* examples/*.bin
 
-CFLAGS =   -O2 -xMIC-AVX512  -fast -static-intel  -restrict -fasm-blocks   \
+CFLAGS =   -O3  -xMIC-AVX512  -static-intel  -restrict -fasm-blocks   \
 		      -I/soft/perftools/tau/papi-knl/include\
-			  -I/home/loden/host_libs/include\
-			 -I/home/loden/hexe_c/include  -qopenmp 
+	          -qopenmp 
 
-CFLAGS  += -I./include/ -I./src
+CFLAGS_MALLOC =  -O3 -xMIC-AVX512   -restrict -fasm-blocks -I./src -I./include 
 
-LIBS =  -qopenmp -lpapi -L/soft/perftools/tau/papi-knl/lib/
+CFLAGS  += -I./include/ -I./src 
 
-CLINKFLAGS =	-O2 -fasm-blocks  -g -qopenmp -lnuma  -lhwloc -qopenmpi -L/home/loden/host_libs/lib/ 
+LIBS =  -qopenmp -lpapi -lnuma  -lhwloc -parallel -L/soft/perftools/tau/papi-knl/lib/
+
+CLINKFLAGS =	-O3 -xMIC-AVX512 -restrict -fasm-blocks  -g
 
 lib/libhexe.so: $(OBJ) 
 	$(CC) -shared -Wl,-soname,libhexe.so.1  -o $@  $(OBJ) -lc
 
+lib/libhexemalloc.so: $(OBJ_MALLOC) 
+	$(CC) -shared -Wl,-soname,libhexemalloc.so.1  -o $@  $(OBJ_MALLOC) -lc
+
+obj/%_omp.o: src/%.c src/prefetch.h src/list.h
+	 $(CC) -fPIC -DWITH_PREFETCHER $(CFLAGS) -c -o $@ $<
+
 obj/%.o: src/%.c src/prefetch.h src/list.h
-	 $(CC) -fPIC $(CFLAGS) -c -o $@ $<
+	 $(CC) -fPIC $(CFLAGS_MALLOC) -c -o $@ $<
 
 examples/%.bin: examples/%.o  
-	$(CC) $ $(CLINKFLAGS) -o $@ $<  libhexeknl.a  
+	$(CC) $ $(CLINKFLAGS) $(LIBS)  -o $@ $<  libhexeknl.a  
 
 examples/%.o: examples/%.c libhexeknl.a
 	$(CC) $ $(CFLAGS) -c -o $@ $<
 
 examples/%.bin: examples/%.opp
-	$(CPP) $ $(CLINKFLAGS) -o $@ $<  libhexeknl.a  
+	$(CPP) $ $(CLINKFLAGS) $(LIBS) -o $@ $<  libhexeknl.a
 
 examples/%.opp: examples/%.cpp libhexeknl.a
 	$(CPP) $ $(CFLAGS) -c -o $@ $<
 
-libhexeknl.a: $(OBJ) 
+libhexeknl.a: $(OBJ)
 	ar cvr libhexeknl.a  $(OBJ)
+
+libhexemalloc.a: $(OBJ_MALLOC)
+	ar cvr libhexemalloc.a  $(OBJ_MALLOC)
 
 

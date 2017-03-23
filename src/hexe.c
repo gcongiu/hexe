@@ -1,24 +1,28 @@
-#include "prefetch.h"
-#include "hexe.h"
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <numaif.h>
-#include "list.h"
+#include <numa.h>
 #include <sys/mman.h>
-#include "hexe_intern.h"
+#include "hexe_malloc.h"
+#include <string.h>
+#include <hwloc/linux-libnuma.h>
+#ifdef WITH_PREFETCHER
+#include <omp.h>
+#include "prefetch.h"
+#endif
 
-static unsigned long tacc_rdtscp(int *chip, int *core)
-{
-    unsigned long a,d,c;
-    __asm__ volatile("rdtscp" : "=a" (a), "=d" (d), "=c" (c));
-    *chip = (c & 0xFFF000)>>12;
-    *core = c & 0xFFF;
-    return ((unsigned long)a) | (((unsigned long)d) << 32);;
-}
+struct node *head = NULL;
+struct node* pinned = NULL;
+struct node* fixed = NULL;
+struct hexe_malloc *mem_manager;
+struct hexe_prefetcher *prefetcher;
 
-static void detect_knl_mode(struct hexe *h)
+
+
+
+static void detect_knl_mode()
 {
 
     hwloc_obj_t root;
@@ -27,137 +31,276 @@ static void detect_knl_mode(struct hexe *h)
     const char *memory_mode;
     int numa_nodes, i;
     int cores;
-    hwloc_topology_init(&h->topology);
-    hwloc_topology_load(h->topology);
-    root = hwloc_get_root_obj(h->topology);
-    h->mcdram_avail = 0 ;
+    hwloc_topology_init(&mem_manager->topology);
+    hwloc_topology_load(mem_manager->topology);
+    root = hwloc_get_root_obj(mem_manager->topology);
+    mem_manager->mcdram_avail = 0 ;
     memory_mode = hwloc_obj_get_info_by_name(root, "MemoryMode");
-    
+
     if(memory_mode) {
         if(strncmp(memory_mode, "Flat" , sizeof("Flat"))== 0) {
-            printf("Flat\n");
-            h->memory_mode = FLAT;
+
+            mem_manager->memory_mode = FLAT;
         }
 
         else if(strncmp(memory_mode, "Cache" , sizeof("Cache")) == 0) {
-            printf("Cache mode \n"); 
-            h->memory_mode = CACHE;
+
+            mem_manager->memory_mode = CACHE;
         }
         else if(strncmp(memory_mode, "Hybrid25" , sizeof("Hybrid25")) == 0) {
-            printf("Hybrid25 mode \n"); 
-            h->memory_mode = HYBRID25;
+
+            mem_manager->memory_mode = HYBRID25;
         }
         else if(strncmp(memory_mode, "Hybrid50" , sizeof("Hybrid50")) == 0) {
-            printf("Hybrid50 mode \n"); 
-            h->memory_mode = HYBRID25;
+
+            mem_manager->memory_mode = HYBRID25;
         }
     }
     else{
-        printf("Here I am \n");
-        h->memory_mode = CACHE;  /*we assume not to have different types */;
-        h->mcdram_avail = 0;
+
+        mem_manager->memory_mode = CACHE;  /*we assume not to have different types */;
+        mem_manager->mcdram_avail = 0;
         }
 
     cluster_mode = hwloc_obj_get_info_by_name(root, "ClusterMode");
     if(cluster_mode){
-        if(strncmp(cluster_mode, "Quadrant" , sizeof("Quadrant"))== 0) {
-            printf("Quadrant\n");
-            h->cluster_mode = QUADRANT;
+       if(strncmp(cluster_mode, "Quadrant" , sizeof("Quadrant"))== 0) {
+
+            mem_manager->cluster_mode = QUADRANT;
         }
          if(strncmp(cluster_mode, "Hemisphere" , sizeof("Hemisphere"))== 0) {
-            printf("Hemisphere\n");
-            h->cluster_mode =  HEMISPHERE;
+
+            mem_manager->cluster_mode =  HEMISPHERE;
         }
 
         else if(strncmp(cluster_mode, "SNC2" , sizeof("SNC2"))== 0) {
-            printf("SNC2\n");
-            h->cluster_mode = SNC2;
+
+            mem_manager->cluster_mode = SNC2;
         }
         else if(strncmp(cluster_mode, "SNC4" , sizeof("SNC4"))== 0) {
-            printf("SNC4\n");
-            h->cluster_mode = SNC4;
+
+            mem_manager->cluster_mode = SNC4;
         }
         else if(strncmp(cluster_mode, "All2All" , sizeof("All2All"))== 0) {
-            printf("All2All\n");
-            h->cluster_mode = SNC2;
+
+            mem_manager->cluster_mode = SNC2;
         }
 
     }
     else
-        h->cluster_mode = -1;
+        mem_manager->cluster_mode = -1;
 
-    numa_nodes = hwloc_get_nbobjs_by_type(h->topology, HWLOC_OBJ_NUMANODE);
-    cores =  hwloc_get_nbobjs_by_type(h->topology, HWLOC_OBJ_CORE);
+    numa_nodes = hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_NUMANODE);
+    cores =  hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_CORE);
 
-    if (h->memory_mode & (FLAT | HYBRID25 | HYBRID50)) {
+    if (mem_manager->memory_mode & (FLAT | HYBRID25 | HYBRID50)) {
 
-        h->prefetch_threads = cores/4;
-        h->compute_threads = cores - cores/4;
-
-            /*some checkse */
-        if(h->cluster_mode & (QUADRANT | HEMISPHERE | ALL2ALL)) {
+                   /*some checkse */
+        if(mem_manager->cluster_mode & (QUADRANT | HEMISPHERE | ALL2ALL)) {
             assert(numa_nodes == 2);
         }
-        else if(h->cluster_mode & (SNC2)) {
+        else if(mem_manager->cluster_mode & (SNC2)) {
             assert(numa_nodes == 4);
         }
-        else if(h->cluster_mode & (SNC4)) {
+        else if(mem_manager->cluster_mode & (SNC4)) {
             assert(numa_nodes == 8);
         }
-        h->ddr_sets = malloc(sizeof(hwloc_bitmap_t) * numa_nodes/2);
-        h->mcdram_sets = malloc(sizeof(hwloc_bitmap_t) * numa_nodes/2);
-        h->all_ddr = hwloc_bitmap_alloc();
-        h->all_mcdram = hwloc_bitmap_alloc();
-        h->mcdram_nodes = numa_nodes/2;
-        h->ddr_nodes = numa_nodes/2;
+        mem_manager->ddr_sets = malloc(sizeof(unsigned long) * numa_nodes/2);
+        mem_manager->mcdram_sets = malloc(sizeof(unsigned long) * numa_nodes/2);
+        mem_manager->all_ddr = hwloc_bitmap_alloc();
+        mem_manager->all_mcdram = hwloc_bitmap_alloc();
+        mem_manager->mcdram_nodes = numa_nodes/2;
+        mem_manager->ddr_nodes = numa_nodes/2;
         for (i = 0; i<numa_nodes; i++) {
-            obj=hwloc_get_obj_by_type(h->topology, HWLOC_OBJ_NUMANODE, i);
+            obj=hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_NUMANODE, i);
 
             if(!hwloc_bitmap_iszero(obj->cpuset)) {
-                if(i/2==2)
-                h->ddr_sets[i/2]=obj->nodeset;
-                hwloc_bitmap_or(h->all_ddr, obj->nodeset, h->all_ddr);
+                mem_manager->ddr_sets[i/2]=hwloc_bitmap_to_ulong(obj->nodeset);
+                hwloc_bitmap_or(mem_manager->all_ddr, obj->nodeset, mem_manager->all_ddr);
+
             }
             else{
-                h->mcdram_sets[i/2]=obj->nodeset; 
-                hwloc_bitmap_or(h->all_mcdram, obj->nodeset, h->all_mcdram);
-                h->mcdram_avail += obj->memory.total_memory;
+                mem_manager->mcdram_sets[i/2]=hwloc_bitmap_to_ulong(obj->nodeset);
+                hwloc_bitmap_or(mem_manager->all_mcdram, obj->nodeset, mem_manager->all_mcdram);
+                size_t tmp;
+                mem_manager->total_mcdram += numa_node_size(hwloc_bitmap_first(obj->nodeset), &tmp);
+                mem_manager->mcdram_avail += tmp;
             }
         }
 
-   printf(" have %ld \n", hwloc_bitmap_to_ulong (h->all_mcdram) );
-
+      mem_manager->mcdram_bitmask =  hwloc_nodeset_to_linux_libnuma_bitmask(mem_manager->topology, mem_manager->all_mcdram);
     }
     else { /*cache mode or not known*/
-        if(h->cluster_mode & (QUADRANT | HEMISPHERE | ALL2ALL)) {
+        if(mem_manager->cluster_mode & (QUADRANT | HEMISPHERE | ALL2ALL)) {
             assert(numa_nodes == 1 || numa_nodes == 0);
         }
-        else if(h->cluster_mode & (SNC2)) {
+        else if(mem_manager->cluster_mode & (SNC2)) {
             assert(numa_nodes == 2);
         }
-        else if(h->cluster_mode & (SNC4)) {
+        else if(mem_manager->cluster_mode & (SNC4)) {
             assert(numa_nodes == 4);
         }
         if(numa_nodes) {
-            h->ddr_sets = malloc(sizeof(hwloc_bitmap_t) * numa_nodes);
-            h->mcdram_sets = NULL;
-            h->all_ddr = hwloc_bitmap_alloc();
-            h->compute_threads = cores ;
+            mem_manager->ddr_sets = malloc(sizeof(hwloc_bitmap_t) * numa_nodes);
+            mem_manager->mcdram_sets = NULL;
+            mem_manager->all_ddr = hwloc_bitmap_alloc();
+            mem_manager->ddr_nodes = numa_nodes;
             for (i = 0; i<numa_nodes; i++) {
-                obj=hwloc_get_obj_by_type(h->topology, HWLOC_OBJ_NUMANODE, i);
-                h->ddr_sets[i]=obj->nodeset;
-                hwloc_bitmap_or(h->all_ddr, obj->nodeset, h->all_ddr);
+                obj=hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_NUMANODE, i);
+                mem_manager->ddr_sets[i]=hwloc_bitmap_to_ulong(obj->nodeset);
+                hwloc_bitmap_or(mem_manager->all_ddr, obj->nodeset, mem_manager->all_ddr);
             }
         }
+        printf("I have %d numa_nodes\n", numa_nodes);
+    }
+
+
+      mem_manager->ddr_bitmask =  hwloc_nodeset_to_linux_libnuma_bitmask(mem_manager->topology, mem_manager->all_ddr);
+    //printf("have total %3.2fGB memory, %3.2fGB are avilavle\n", (double)prefetcher->total_mcdram/(1024*1024.0*1024.0),(double) mem_manager->mcdram_avail/(1024.0*1024.0 * 1024));
+
+
+}
+
+size_t hexe_avail_mcdram() {
+
+    return mem_manager->mcdram_avail;
+}
+int hexe_init()
+{
+    int threads;
+    char *sthreads;
+    if(hexe_is_init())
+        return 0;
+
+    mem_manager = (struct hexe_malloc*) malloc (sizeof(struct hexe_malloc));
+    memset(mem_manager, 0, sizeof(struct hexe_malloc));
+    detect_knl_mode();
+#ifdef WITH_PREFETCHER
+
+    prefetcher =(struct hexe_prefetcher*)  malloc(sizeof(struct hexe_prefetcher));
+    prefetcher->prefetch_threads = 0;
+    prefetcher->compute_threads = 64;
+
+    if(mem_manager->memory_mode != CACHE){
+
+        sthreads =  getenv("HEXE_PREFETCH_THREADS");
+        if(sthreads)
+             prefetcher->prefetch_threads = atoi(sthreads);
+    }
+    sthreads =  getenv("HEXE_COMPUTE_THREADS");
+    if(sthreads)
+       prefetcher->compute_threads = atoi(sthreads);
+#endif
+    mem_manager->is_init = 1;
+    return 0;
+}
+
+int hexe_is_init() 
+{
+    if(!mem_manager)
+        return 0;
+    else
+        return mem_manager->is_init;
+}
+
+int hexe_mpi_bind(int rank, int size) {
+
+    hwloc_obj_t tmp;
+    int current_core = 0; 
+    int add  = size > 32? 1:2;
+    int i;
+
+    for (i = 0; i<rank; i++) {
+        current_core += 16;
+        if(current_core >= 64)
+            current_core = current_core%64+add;
+    }
+
+        tmp = hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_CORE, (current_core));
+
+    hwloc_set_cpubind(mem_manager->topology,tmp->cpuset, HWLOC_CPUBIND_THREAD);
+
+    numa_set_localalloc();
+    return 0;
+}
+
+void* hexe_request_hbw(void* map_addr, size_t size, int priority) {
+
+  if(map_addr == NULL)
+      map_addr= mmap(map_addr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
+   if(mem_manager->memory_mode == CACHE && (mem_manager->cluster_mode & (SNC2|SNC4)))
+        bind_strided( map_addr, size, 1);
+
+      insertList(map_addr, size, priority);
+    return map_addr;
+}
+
+
+int hexe_bind_requested_memory(int redistribute){
+
+    unsigned long node_mask, ddr_mask;
+    if(mem_manager->memory_mode == CACHE)
+        return 0;
+    if(redistribute) {
+        mem_manager->mcdram_avail= mem_manager->total_mcdram;
+        mem_manager->mcdram_avail-=(prefetcher->cache_size +
+                            1024*1024*512);
+        reset_list();
 
     }
 
-    printf("Have a total of %ld Gbyte hbw memory\n", h->mcdram_avail/(1024*1024*1024));
+   sort_memory_list();
 
-    h->total_mcdram = h->mcdram_avail;
-    if(h->mcdram_avail > 0)
-        h->mcdram_avail -= (512*1024*1024);
+   get_best_layout();
+    print_list();
+   return 0;
+
 }
+
+int hexe_change_priority(void* ptr, int priority) {
+
+    struct node* entry = find(ptr, 0);
+    int old;
+    if(mem_manager->memory_mode == CACHE)
+        return 0;
+
+    if(! entry)
+        return -1;
+    old = entry->priority;
+    entry->priority = priority;
+   return 0;
+}
+
+
+
+
+void hexe_free_memory(void *ptr) {
+
+    struct node* entry = delete_from_list(ptr);
+    if(entry == NULL) {
+
+            return;
+    }
+    switch (entry->location){
+        case MCDRAM_KNP:
+        case DDR_KNP:
+        case UNDEFINED:
+            munmap(entry->addr, entry->size);
+            break;
+        case MCDRAM_FIXED:
+        case DDR_FIXED:
+            numa_free(entry->addr, entry->size);
+            break;
+    }
+
+    if(entry->location == MCDRAM_KNP) {
+        mem_manager->mcdram_avail+= entry->size;
+
+    }
+
+}
+
+#ifdef WITH_PREFETCHER
 static int _hexe_find_sibling_knl(int core_id) {
 
     int     n;
@@ -189,6 +332,27 @@ static int _hexe_find_sibling_knl(int core_id) {
   return 0;
 
 }
+
+static inline void hexe_free_pool()
+{
+
+    printf("free pool\n");
+     if(mem_manager->memory_mode == CACHE)
+        return;
+    if(prefetcher->cache) {
+        munmap(prefetcher->cache, prefetcher->cache_size);
+        prefetcher->cache = NULL;
+    }
+    if(prefetcher->cache_pool)
+        free(prefetcher->cache_pool);
+    prefetcher->cache_pool = NULL;
+    if(prefetcher->handle)
+        free(prefetcher->handle);
+    prefetcher->handle = NULL;
+
+}
+
+
 static inline long hexe_distribute_compute_only()
 {
     int cores;
@@ -198,11 +362,11 @@ static inline long hexe_distribute_compute_only()
     if(prefetcher->compute_threads <= 32)
         add = 2;
 
-    cores = hwloc_get_nbobjs_by_type(prefetcher->topology, HWLOC_OBJ_CORE);
+    cores = hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_CORE);
     prefetcher->prefetch_cpusets = NULL;
     prefetcher->compute_cpusets = malloc(sizeof(hwloc_cpuset_t) * prefetcher->compute_threads);
     if(prefetcher->compute_threads > cores) {
-        cores =  hwloc_get_nbobjs_by_type(prefetcher->topology, HWLOC_OBJ_PU);
+        cores =  hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_PU);
     }
 
     for (i = 0; i<prefetcher->compute_threads;i++) {
@@ -215,7 +379,45 @@ static inline long hexe_distribute_compute_only()
 
 }
 
-static int hexe_distribute_threads_knl()
+int distribute_threads_snc() {
+
+    int num_nodes = mem_manager->ddr_nodes;
+    int c_thread_per_node = prefetcher->compute_threads / num_nodes;
+    int f_thread_per_node = prefetcher->prefetch_threads / num_nodes;
+    int cores;
+    int add;
+    int total_threads = prefetcher->prefetch_threads + prefetcher->compute_threads;
+    int current_core;
+    hwloc_obj_t tmp;
+    cores = hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_CORE);
+    add = total_threads > 32 ? 1: 2;
+    prefetcher->prefetch_cpusets = malloc(sizeof(hwloc_cpuset_t) * prefetcher->prefetch_threads);
+    prefetcher->compute_cpusets = malloc(sizeof(hwloc_cpuset_t) * prefetcher->compute_threads);
+    int k = 0, i, j, l = 0;
+    
+    for(i = 0; i < num_nodes; i++) {
+        current_core = (cores/num_nodes) * i;
+        for(j = 0; j< c_thread_per_node; j++){
+
+            tmp = hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_CORE, current_core);
+            prefetcher->compute_cpusets[k] = hwloc_bitmap_dup(tmp->cpuset);
+            current_core +=add;
+            k++;
+        }
+        for(j = 0; j< f_thread_per_node; j++){
+
+
+            tmp = hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_CORE, current_core);
+            prefetcher->compute_cpusets[l] = hwloc_bitmap_dup(tmp->cpuset);
+            current_core +=add;
+            l++;
+        }
+
+    }
+
+}
+
+int hexe_distribute_threads_knl()
 {
     int total_threads = prefetcher->prefetch_threads + prefetcher->compute_threads;
     int root, cores, pu;
@@ -224,10 +426,13 @@ static int hexe_distribute_threads_knl()
     int add = 1;
     if(total_threads == 0)
         return -1;
+
+   if(mem_manager->cluster_mode & (SNC2 | SNC4))
+        distribute_threads_snc();
    if(prefetcher->prefetch_threads == 0)
         return hexe_distribute_compute_only();
-     cores = hwloc_get_nbobjs_by_type(prefetcher->topology, HWLOC_OBJ_CORE);
-     pu = hwloc_get_nbobjs_by_type(prefetcher->topology, HWLOC_OBJ_PU);
+     cores = hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_CORE);
+     pu = hwloc_get_nbobjs_by_type(mem_manager->topology, HWLOC_OBJ_PU);
 
      if(pu < total_threads) {
         printf("Warining: oversubscribing, no thread binding\n");
@@ -249,7 +454,7 @@ static int hexe_distribute_threads_knl()
     hwloc_obj_t tmp;
 
         for (i = 0; i<prefetcher->compute_threads;i++) {
-            tmp = hwloc_get_obj_by_type(prefetcher->topology, HWLOC_OBJ_CORE, current_core);
+            tmp = hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_CORE, current_core);
             prefetcher->compute_cpusets[i] = hwloc_bitmap_dup(tmp->cpuset);
             current_core +=cores/4;
             if(current_core >= cores)
@@ -258,7 +463,7 @@ static int hexe_distribute_threads_knl()
         }
 
     for (i=0; i<prefetcher->prefetch_threads;i++) {
-        tmp = hwloc_get_obj_by_type(prefetcher->topology, HWLOC_OBJ_CORE, current_core);
+        tmp = hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_CORE, current_core);
         prefetcher->prefetch_cpusets[i] = hwloc_bitmap_dup(tmp->cpuset);
         current_core += cores/4;
         if(current_core >= cores)
@@ -267,334 +472,64 @@ static int hexe_distribute_threads_knl()
     }
 
 }
-int hexe_init()
-{
-    int threads;
-    char *sthreads;
-    if(hexe_is_init())
-        return 0;
-    prefetcher =(struct hexe*)  malloc(sizeof(struct hexe));
-    memset(prefetcher, 0, sizeof(struct hexe));
-    detect_knl_mode(prefetcher);
-    if(prefetcher->memory_mode != CACHE){
-        sthreads =  getenv("HEXE_PREFETCH_THREADS");
-        if(sthreads)
-             prefetcher->prefetch_threads = atoi(sthreads);
-    }
-    sthreads =  getenv("HEXE_COMPUTE_THREADS");
-    if(sthreads)
-       prefetcher->compute_threads = atoi(sthreads);
-
-    hexe_distribute_threads_knl();
-    prefetcher->is_init = 1;
-    return 0;
-}
-
-int hexe_is_init() 
-{
-    if(!prefetcher)
-        return 0;
-    else
-        return prefetcher->is_init;
-}
 int hexe_set_prefetch_threads(int threads){
 
 
-    if(prefetcher->memory_mode == CACHE)
+    if(mem_manager->memory_mode == CACHE)
         return 0;
     prefetcher->prefetch_threads = threads;
-    hexe_distribute_threads_knl();
+ //   hexe_distribute_threads_knl();
 }
 int hexe_set_compute_threads(int threads){
 
     prefetcher->compute_threads = threads;
-    hexe_distribute_threads_knl();
+   // hexe_distribute_threads_knl();
 }
 
 int hexe_finalize()
 {
-    if(prefetcher->memory_mode == CACHE){
+    if(mem_manager->memory_mode == CACHE){
         if(prefetcher->cache_pool)
             free(prefetcher->cache_pool);
     }
     else {
-
+    printf("here %p \n", prefetcher->cache);
 	if(prefetcher->is_started)  
       finish_thread( );
-        if(prefetcher->cache) 
+   if(prefetcher->cache) 
             hexe_free_pool();
 
     }
 
-   hwloc_topology_destroy(prefetcher->topology);
+   hwloc_topology_destroy(mem_manager->topology);
     free(prefetcher);
   
 }
 
 int hexe_start()
 {
+      hexe_distribute_threads_knl();
     if(prefetcher->compute_threads) {
          omp_set_num_threads(prefetcher->compute_threads);
-         #pragma omp parallel
+        #pragma omp parallel
         {
             int id = omp_get_thread_num();
-            hwloc_set_cpubind    (prefetcher->topology, prefetcher->compute_cpusets[id], HWLOC_CPUBIND_THREAD);
+            hwloc_set_cpubind    (mem_manager->topology, prefetcher->compute_cpusets[id], HWLOC_CPUBIND_THREAD);
         }
     }
-    if(prefetcher->memory_mode == CACHE)
+ if(mem_manager->memory_mode == CACHE)
         return 0;
-    if(!prefetcher)
+   
+
+   if(!prefetcher)
         return -1;
     if(! prefetcher->cache_pool)
         return -1;
     if (prefetcher->prefetch_cpusets)
-       create_new_thread_with_topo(prefetcher->ncaches, prefetcher->topology, prefetcher->prefetch_cpusets, prefetcher->prefetch_threads);
+       create_new_thread_with_topo(prefetcher->ncaches, mem_manager->topology, prefetcher->prefetch_cpusets, prefetcher->prefetch_threads);
     else
         create_new_thread(prefetcher->ncaches, prefetcher->prefetch_threads);
     prefetcher->is_started=1;
-}
-
-void* hexe_request_hbw(void* map_addr, size_t size, int priority) {
-
-  if(map_addr == NULL)
-      map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-
-      insertList(map_addr, size, priority);
-    return map_addr;
-
-}
-void* hexe_request_hbw2(uint64_t size, int priority) {
-
-    void *map_addr;
-
-      map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-
-      insertList(map_addr, (unsigned long long) size , priority);
-    return map_addr;
-
-}
-
-int hexe_bind_requested_memory(int redistribute){
-
-    unsigned long node_mask, ddr_mask;
-    if(prefetcher->memory_mode == CACHE)
-        return 0;
-    if(redistribute) {
-        prefetcher->mcdram_avail= prefetcher->total_mcdram;
-        prefetcher->mcdram_avail-=(prefetcher->cache_size +
-                            1024*1024*512);
-        reset_list();
-
-    }
-
-
-   sort_memory_list();
-
-   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
-   ddr_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
-
-   get_best_layout(node_mask, ddr_mask);
-    print_list();
-   return 0;
-
-}
-
-int hexe_change_priority(void* ptr, int priority) {
-
-    struct node* entry = find(ptr);
-    int old;
-    if(prefetcher->memory_mode == CACHE)
-        return 0;
-
-    if(! entry)
-        return -1;
-    old = entry->priority;
-    entry->priority = priority;
-   return 0;
-}
-int hexe_is_in_hbw (void *ptr) {
-
-
-    if(prefetcher->memory_mode == CACHE)
-        return 0;
-    struct node* entry = find(ptr);
-    if(! entry)
-        return -1;
-    return entry->location == 1 ? 1: 0;
-
-}
-
-void hexe_free_memory(void *ptr) {
-
-    struct node* entry = delete_from_list(ptr);
-    if(entry == NULL)
-            return;
-    munmap(entry->addr, entry->size);
-    if(entry->location == 1) {
-        prefetcher->mcdram_avail+= entry->size;
-
-    }
-
-}
-
-void* hexe_alloc_hbw(size_t size )
-{
-  void *map_addr;
-  unsigned long node_mask;
-  int mode;
-   struct node* entry;
-  if( !hexe_is_init() )
-    hexe_init();
-   mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
-
-   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
-   map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-   mbind(map_addr, size, mode,
-          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-    madvise(map_addr, size, MADV_HUGEPAGE);
-    entry = insertList(map_addr, size, 100); 
-    entry->location =1;
-    prefetcher->mcdram_avail -= size;
-   return map_addr;
-}
-
-void* hexe_calloc_hbw(size_t num, size_t el_size )
-{
-    void *map_addr;
-    unsigned long node_mask;
-    int mode;
-    struct node* entry;
-    size_t size = num * el_size;
-    if( !hexe_is_init() )
-        hexe_init();
-    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
-
-    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
-    map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-    mbind(map_addr, size, mode,
-            &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-    madvise(map_addr, size, MADV_HUGEPAGE);
-    entry = insertList(map_addr, size, 100); 
-    entry->location =1;
-    prefetcher->mcdram_avail -= size;
-    memset(map_addr, 0, size); 
-    return map_addr;
-}
-
-
-void* hexe_realloc_hbw(void* old,  size_t size )
-{
-    void *map_addr;
-    unsigned long node_mask;
-    struct node *entry;
-    int mode;
-    if( !hexe_is_init() )
-        hexe_init();
-
-    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
-
-    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
-    map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-    mbind(map_addr, size, mode,
-            &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-
-
-    entry = insertList(map_addr, size, 99); 
-    entry->location =1;
-
-    madvise(map_addr, size, MADV_HUGEPAGE);
-    entry = delete_from_list(old);
-    if(entry){
-        memcpy(map_addr, old, (size>entry->size)? entry->size:size);
-        munmap(entry->addr, entry->size);
-        prefetcher->mcdram_avail += entry->size;
-        free(entry);
-    }
-
-    prefetcher->mcdram_avail -= size;
-
-    return map_addr;
-}
-
-
-
-void* hexe_alloc_ddr(size_t size )
-{
-  void *map_addr;
-  unsigned long node_mask;
-  int mode;
-
-  struct node *entry;
-  if( !hexe_is_init() )
-    hexe_init();
-    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
-
-   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
-   map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-   mbind(map_addr, size, mode,
-          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-
-    madvise(map_addr, size, MADV_HUGEPAGE);
-    entry = insertList(map_addr, size, -1); 
-    entry->location =0;
- 
-   return map_addr;
-}
-
-
-void* hexe_calloc_ddr(size_t num, size_t el_size)
-{
-    void *map_addr;
-    unsigned long node_mask;
-    int mode;
-    struct node *entry;
-    size_t size = num * el_size;
-
-    if( !hexe_is_init() )
-        hexe_init();
-    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
-
-    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
-    map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-    mbind(map_addr, size, mode,
-            &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-
-    madvise(map_addr, size, MADV_HUGEPAGE);
-    entry = insertList(map_addr, size, -1); 
-    entry->location =0;
-    memset(map_addr, 0, size);
-    return map_addr;
-}
-
-void* hexe_realloc_ddr(void* old,  size_t size )
-{
-  void *map_addr;
-  unsigned long node_mask;
-  struct node *entry;
-  int mode;
-  if( !hexe_is_init() )
-    hexe_init();
-
-    mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
-
-   node_mask = hwloc_bitmap_to_ulong(prefetcher->all_ddr);
-   map_addr= mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |MAP_ANON, -1, 0);
-   mbind(map_addr, size, mode,
-          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-
-
-    entry = insertList(map_addr, size, -1); 
-    entry->location =1;
- 
-    madvise(map_addr, size, MADV_HUGEPAGE);
-    entry = delete_from_list(old);
-    if(entry){
-        memcpy(map_addr, old, (size>entry->size)? entry->size:size);
-        munmap(entry->addr, entry->size);
-        free(entry);
-    }
-
-   return map_addr;
 }
 
 static inline int malloc_fake_pool(int n) {
@@ -614,24 +549,25 @@ static inline int malloc_fake_pool(int n) {
 int hexe_alloc_pool(size_t size, int n){
 
     size_t total_size = (size * n);
-    int i;
+    size_t real_size = size; 
+   int i;
     unsigned long node_mask;
-    int nodes = prefetcher->mcdram_nodes + prefetcher->ddr_nodes;
 
-    int mode = (prefetcher->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+    int mode = (mem_manager->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
     prefetcher->handle = (prefetch_handle_t*)  malloc(sizeof(prefetch_handle_t) * n);;
     memset(prefetcher->handle, 0x0, sizeof(prefetch_handle_t)*n); 
 
-    if(prefetcher->memory_mode == CACHE)
+    if(mem_manager->memory_mode == CACHE)
         return malloc_fake_pool(n);
 
-   if(total_size % _SC_PAGE_SIZE != 0)
-        total_size =  (total_size + _SC_PAGE_SIZE) & ~(0xfff);
+   if(real_size & 0xfff )
+        real_size =  (real_size + 4096) & ~((unsigned long) 0xfff);
+    total_size = real_size *n ;
     prefetcher->ncaches = n;
     prefetcher->cache_size = total_size;
     prefetcher->cache_pool = (void**)malloc( sizeof(void*) * n * 2);
- 
-    node_mask = hwloc_bitmap_to_ulong(prefetcher->all_mcdram);
+    printf("the real size is l%ld %ld \n", real_size, size); 
+    node_mask = hwloc_bitmap_to_ulong(mem_manager->all_mcdram);
     if(!prefetcher->cache_pool)
         return -1;
 
@@ -641,39 +577,48 @@ int hexe_alloc_pool(size_t size, int n){
         free(prefetcher->cache_pool);
         return -1;
     }
-   mbind(prefetcher->cache, total_size, mode,
-          &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-
-    madvise(prefetcher->cache, total_size, MADV_HUGEPAGE);
-    prefetcher->mcdram_avail -= total_size;
+   madvise(prefetcher->cache, total_size, MADV_HUGEPAGE);
+    mem_manager->mcdram_avail -= total_size;
     for(i = 0; i<n; i++){
-        prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* size];
+        prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* real_size];
     }
-    prefetcher->counter = malloc(sizeof(int)*prefetcher->ncaches);
+//  if(mem_manager->mcdram_node == 1) {
+        int err = mbind(prefetcher->cache, total_size, mode,
+                &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+        printf("mbind err is %d\n", err);
+         memset(prefetcher->cache,0,total_size); 
+/*      }
+
+      else {
+       for(i = 0; i<n; i++){
+//           mbind(prefetcher->cache_pool[i*2], real_size, mode,
+  //              &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+
+
+          bind_strided(  prefetcher->cache_pool[i*2] , real_size, 0);
+          memset(prefetcher->cache_pool[i*2], 0, real_size); 
+        }
+ 
+  }*/
+
+  prefetcher->counter = malloc(sizeof(int)*prefetcher->ncaches);
    return 0;
 
 }
+void* hexe_sync_fetch(int idx){
 
-void hexe_free_pool()
-{
-     if(prefetcher->memory_mode == CACHE)
-        return;
-    if(prefetcher->cache) {
-        munmap(prefetcher->cache, prefetcher->cache_size);
-        prefetcher->cache = NULL;
-    }
-    if(prefetcher->cache_pool)
-        free(prefetcher->cache_pool);
-    prefetcher->cache_pool = NULL;
-    if(prefetcher->handle)
-        free(prefetcher->handle);
-    prefetcher->handle = NULL;
+   if(prefetcher->handle[idx]!=0)
+       prefetch_wait(prefetcher->handle[idx]);
 
+    prefetcher->handle[idx] = 0;
+
+    return prefetcher->cache_pool[2*idx];
 }
+
 
 int hexe_start_fetch_continous(void *start_addr, size_t size, int idx)
 {
-    if(prefetcher->memory_mode == CACHE){
+    if(mem_manager->memory_mode == CACHE){
         prefetcher->cache_pool[idx]= start_addr;
         return 0;
     }
@@ -685,7 +630,7 @@ int hexe_start_fetch_continous(void *start_addr, size_t size, int idx)
 
 int hexe_start_fetch_continous_taged(void *start_addr, size_t size, int idx, int tag)
 {
-    if(prefetcher->memory_mode == CACHE){
+    if(mem_manager->memory_mode == CACHE){
         prefetcher->cache_pool[idx]= start_addr;
         return 0;
     }
@@ -696,7 +641,7 @@ int hexe_start_fetch_continous_taged(void *start_addr, size_t size, int idx, int
 }
 int hexe_start_fetch_strided(void *start_addr, size_t count, size_t block_len, size_t stride,  int idx)
 {
-    if(prefetcher->memory_mode == CACHE){
+    if(mem_manager->memory_mode == CACHE){
         printf("not supported\n");
         prefetcher->cache_pool[idx]= start_addr;
         return 0;
@@ -708,10 +653,9 @@ int hexe_start_fetch_strided(void *start_addr, size_t count, size_t block_len, s
 }
 
 
-
 int hexe_start_write_back_continous(size_t size, int cache_idx){
 
-    if(prefetcher->memory_mode == CACHE)
+    if(mem_manager->memory_mode == CACHE)
         return 0; 
 
     hexe_sync_fetch(cache_idx);
@@ -722,7 +666,7 @@ int hexe_start_write_back_continous(size_t size, int cache_idx){
 
 int hexe_start_write_back_strided(size_t count, size_t block_len, size_t stride,  int idx)
 {
-    if(prefetcher->memory_mode == CACHE){
+    if(mem_manager->memory_mode == CACHE){
         printf("not supported\n");
         return 0;
     }
@@ -734,7 +678,7 @@ int hexe_start_write_back_strided(size_t count, size_t block_len, size_t stride,
 
 int hexe_start_fetch_non_continous(void *start_addr, int* offset_list, size_t element_size, int elements, int idx){ 
 
-    if(prefetcher->memory_mode == CACHE)
+    if(mem_manager->memory_mode == CACHE)
         return 0; 
 
     prefetcher->handle[idx] = start_prefetch_noncontinous(start_addr, prefetcher->cache_pool[idx], offset_list, element_size, elements);
@@ -744,7 +688,7 @@ int hexe_start_fetch_non_continous(void *start_addr, int* offset_list, size_t el
 
 void *hexe_get_cache_for_write_back(int idx, void *addr) {
 
-    if(prefetcher->memory_mode == CACHE)
+    if(mem_manager->memory_mode == CACHE)
     {
         prefetcher->cache_pool[idx]= addr;
         return addr;
@@ -752,15 +696,6 @@ void *hexe_get_cache_for_write_back(int idx, void *addr) {
     prefetcher->cache_pool[idx*2+1]= addr;
     return   hexe_sync_fetch(idx);
 
-}
-void* hexe_sync_fetch(int idx){
-
-   if(prefetcher->handle[idx]!=0)
-       prefetch_wait(prefetcher->handle[idx]);
-
-    prefetcher->handle[idx] = 0;
-
-    return prefetcher->cache_pool[2*idx];
 }
 static inline void wait_tag(int idx, int tag) {
  volatile int tmp = prefetcher->counter[idx];
@@ -789,3 +724,5 @@ void* hexe_wait_index(int idx, int index){
     return prefetcher->cache_pool[idx*2];
 
 }
+
+#endif
