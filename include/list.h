@@ -223,7 +223,7 @@ static inline int bind_strided( void *addr, size_t size, int flag)
              node_mask = mem_manager->ddr_sets[i];
         else
             node_mask = mem_manager->ddr_sets[i]| mem_manager->mcdram_sets[i];
-        //printf("%p bind %ld tu %lx\n",current_addr,  chunk_size, node_mask);
+        printf("%p bind %ld tu %lx\n",current_addr,  chunk_size, node_mask);
         ret =  mbind(current_addr, chunk_size, mode,
                 &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
         if(ret)
@@ -310,10 +310,10 @@ static inline void  get_best_layout()
         }
         else if(current->priority != 0) {
             if((current->location != DDR_KNP) )
-                /*          if( (mem_manager->ddr_nodes > 1) ) 
-                            bind_strided( current->addr, current->size, 1);
-                            else
-                            */           mbind(current->addr, current->size,  MPOL_INTERLEAVE,
+          //                if( (mem_manager->ddr_nodes > 1) ) 
+        //                    bind_strided( current->addr, current->size, 1);
+            //                else
+                                       mbind(current->addr, current->size,  MPOL_INTERLEAVE,
                                     &ddr_node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
             current->location = DDR_KNP;
         }

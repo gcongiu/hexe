@@ -16,7 +16,6 @@ example: examples/init.bin\
 
 
 all: default  example
-	cp src/hexe_allocator.hpp include/
 
 OBJ = obj/hexe_omp.o obj/verify_omp.o
 
@@ -41,13 +40,13 @@ CLINKFLAGS =	-O3 -xMIC-AVX512 -restrict -fasm-blocks  -g
 lib/libhexe.so: $(OBJ) 
 	$(CC) -shared -Wl,-soname,libhexe.so.1  -o $@  $(OBJ) -lc
 
-lib/libhexemalloc.so: $(OBJ_MALLOC) 
+lib/libhexemalloc.so: $(OBJ_MALLOC)  include/list.h include/hexe_malloc.h 
 	$(CC) -shared -Wl,-soname,libhexemalloc.so.1  -o $@  $(OBJ_MALLOC) -lc
 
-obj/%_omp.o: src/%.c src/prefetch.h src/list.h
+obj/%_omp.o: src/%.c src/prefetch.h include/list.h include/hexe_malloc.h
 	 $(CC) -fPIC -DWITH_PREFETCHER $(CFLAGS) -c -o $@ $<
 
-obj/%.o: src/%.c src/prefetch.h src/list.h
+obj/%.o: src/%.c  src/list.h
 	 $(CC) -fPIC $(CFLAGS_MALLOC) -c -o $@ $<
 
 examples/%.bin: examples/%.o  
