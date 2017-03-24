@@ -54,7 +54,7 @@ int main(void)
     verify  = hexe_verify_memory_region(field_E, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);
     printf("Hexe binds Field_E  to HBW? %d Verify? %s\n", is_in, (verify==0 ?  "yes": "no"));
 
- //   hexe_bind_requested_memory(1);
+    hexe_bind_requested_memory(1);
     printf("now redistribute \n"); 
     is_in = hexe_is_in_hbw (field_A);
     verify  = hexe_verify_memory_region(field_A, (size_t) 4* 1024*1024*1024 , TOUCH_PAGES);

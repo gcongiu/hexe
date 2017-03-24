@@ -1,6 +1,5 @@
 #ifndef _hexe_intern_h_
 #define _hexe_intern_h_
-#include "prefetch_intern.h"
 #include <hwloc.h>
 typedef  uint64_t prefetch_handle_t;
 typedef  uint64_t prefetch_thread_t;
@@ -49,13 +48,10 @@ struct hexe_malloc {
     size_t mcdram_per_node[4];
 
 	hwloc_topology_t topology;
-    unsigned long *ddr_sets;
-    unsigned long *mcdram_sets;
+    hwloc_nodeset_t *ddr_sets;
+    hwloc_nodeset_t *mcdram_sets;
     hwloc_nodeset_t all_ddr;
     hwloc_nodeset_t all_mcdram;
-    struct bitmask* ddr_bitmask;
-    struct bitmask* mcdram_bitmask;
-
     int is_init;
 };
 

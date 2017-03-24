@@ -105,22 +105,21 @@ static void detect_knl_mode()
         else if(mem_manager->cluster_mode & (SNC4)) {
             assert(numa_nodes == 8);
         }
-        mem_manager->ddr_sets = malloc(sizeof(unsigned long) * numa_nodes/2);
-        mem_manager->mcdram_sets = malloc(sizeof(unsigned long) * numa_nodes/2);
+        mem_manager->ddr_sets = malloc(sizeof(hwloc_nodeset_t) * numa_nodes/2);
+        mem_manager->mcdram_sets = malloc(sizeof(hwloc_nodeset_t) * numa_nodes/2);
         mem_manager->all_ddr = hwloc_bitmap_alloc();
         mem_manager->all_mcdram = hwloc_bitmap_alloc();
         mem_manager->mcdram_nodes = numa_nodes/2;
         mem_manager->ddr_nodes = numa_nodes/2;
         for (i = 0; i<numa_nodes; i++) {
             obj=hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_NUMANODE, i);
-
             if(!hwloc_bitmap_iszero(obj->cpuset)) {
-                mem_manager->ddr_sets[i/2]=hwloc_bitmap_to_ulong(obj->nodeset);
+                mem_manager->ddr_sets[i/2] = hwloc_bitmap_dup(obj->nodeset);
                 hwloc_bitmap_or(mem_manager->all_ddr, obj->nodeset, mem_manager->all_ddr);
 
             }
             else{
-                mem_manager->mcdram_sets[i/2]=hwloc_bitmap_to_ulong(obj->nodeset);
+                mem_manager->mcdram_sets[i/2]= hwloc_bitmap_dup(obj->nodeset);
                 hwloc_bitmap_or(mem_manager->all_mcdram, obj->nodeset, mem_manager->all_mcdram);
                 size_t tmp;
                 mem_manager->total_mcdram += numa_node_size(hwloc_bitmap_first(obj->nodeset), &tmp);
@@ -128,7 +127,6 @@ static void detect_knl_mode()
             }
         }
 
-      mem_manager->mcdram_bitmask =  hwloc_nodeset_to_linux_libnuma_bitmask(mem_manager->topology, mem_manager->all_mcdram);
     }
     else { /*cache mode or not known*/
         if(mem_manager->cluster_mode & (QUADRANT | HEMISPHERE | ALL2ALL)) {
@@ -147,16 +145,12 @@ static void detect_knl_mode()
             mem_manager->ddr_nodes = numa_nodes;
             for (i = 0; i<numa_nodes; i++) {
                 obj=hwloc_get_obj_by_type(mem_manager->topology, HWLOC_OBJ_NUMANODE, i);
-                mem_manager->ddr_sets[i]=hwloc_bitmap_to_ulong(obj->nodeset);
+                mem_manager->ddr_sets[i]=hwloc_bitmap_dup(obj->nodeset);
                 hwloc_bitmap_or(mem_manager->all_ddr, obj->nodeset, mem_manager->all_ddr);
             }
         }
         printf("I have %d numa_nodes\n", numa_nodes);
     }
-
-
-      mem_manager->ddr_bitmask =  hwloc_nodeset_to_linux_libnuma_bitmask(mem_manager->topology, mem_manager->all_ddr);
-    //printf("have total %3.2fGB memory, %3.2fGB are avilavle\n", (double)prefetcher->total_mcdram/(1024*1024.0*1024.0),(double) mem_manager->mcdram_avail/(1024.0*1024.0 * 1024));
 
 
 }
@@ -551,9 +545,9 @@ int hexe_alloc_pool(size_t size, int n){
     size_t total_size = (size * n);
     size_t real_size = size; 
    int i;
-    unsigned long node_mask;
 
-    int mode = (mem_manager->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+    hwloc_membind_policy_t  mode = (mem_manager->mcdram_nodes > 1) ? HWLOC_MEMBIND_INTERLEAVE: HWLOC_MEMBIND_BIND;
     prefetcher->handle = (prefetch_handle_t*)  malloc(sizeof(prefetch_handle_t) * n);;
     memset(prefetcher->handle, 0x0, sizeof(prefetch_handle_t)*n); 
 
@@ -566,8 +560,7 @@ int hexe_alloc_pool(size_t size, int n){
     prefetcher->ncaches = n;
     prefetcher->cache_size = total_size;
     prefetcher->cache_pool = (void**)malloc( sizeof(void*) * n * 2);
-    printf("the real size is l%ld %ld \n", real_size, size); 
-    node_mask = hwloc_bitmap_to_ulong(mem_manager->all_mcdram);
+
     if(!prefetcher->cache_pool)
         return -1;
 
@@ -583,10 +576,10 @@ int hexe_alloc_pool(size_t size, int n){
         prefetcher->cache_pool[i*2] = &((char*)(prefetcher->cache))[i* real_size];
     }
 //  if(mem_manager->mcdram_node == 1) {
-        int err = mbind(prefetcher->cache, total_size, mode,
-                &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-        printf("mbind err is %d\n", err);
-         memset(prefetcher->cache,0,total_size); 
+        int err 
+       =  hwloc_set_area_membind(mem_manager->topology, prefetcher->cache, total_size,
+                           mem_manager->all_mcdram, mode,  HWLOC_MEMBIND_MIGRATE);
+        memset(prefetcher->cache,0,total_size); 
 /*      }
 
       else {

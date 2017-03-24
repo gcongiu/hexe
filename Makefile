@@ -46,8 +46,8 @@ lib/libhexemalloc.so: $(OBJ_MALLOC)  include/list.h include/hexe_malloc.h
 obj/%_omp.o: src/%.c src/prefetch.h include/list.h include/hexe_malloc.h
 	 $(CC) -fPIC -DWITH_PREFETCHER $(CFLAGS) -c -o $@ $<
 
-obj/%.o: src/%.c  src/list.h
-	 $(CC) -fPIC $(CFLAGS_MALLOC) -c -o $@ $<
+obj/%.o: src/%.c include/list.h include/list.h include/hexe_malloc.h
+	$(CC) -fPIC $(CFLAGS_MALLOC) -c -o $@ $<
 
 examples/%.bin: examples/%.o  
 	$(CC) $ $(CLINKFLAGS) $(LIBS)  -o $@ $<  libhexeknl.a  

@@ -2,6 +2,7 @@
 #define LIST_H
 #include <numa.h>
 #include <numaif.h>
+#define _GNU_SOURCE   
 #include <sys/mman.h>
 #include <errno.h>
 enum memory_location{
@@ -21,6 +22,7 @@ struct node {
     int  location;
     struct node* next;
 };
+
 extern struct node *head;
 extern struct node* pinned;
 extern struct node* fixed;
@@ -205,31 +207,33 @@ static inline int bind_strided( void *addr, size_t size, int flag)
     int n_nodes, i;
     size_t chunk_size;
     char* current_addr = (char*) addr;
-    int mode;
-    unsigned long node_mask;
+    hwloc_membind_policy_t  mode = (flag> 1) ? HWLOC_MEMBIND_INTERLEAVE: HWLOC_MEMBIND_BIND;
+    hwloc_nodeset_t nodeset = hwloc_bitmap_alloc();
     int ret;
     n_nodes = mem_manager->ddr_nodes;
     chunk_size = size/n_nodes;
+
+
     if(chunk_size & 0xfff) {
         chunk_size =  (chunk_size+4096) & ~((unsigned long)(0xfff));
-      //  printf("page size %lx\n", 4096);
-}
-    //printf("chunk size %lx %lx %lx\n", chunk_size, chunk_size & 0xfff, ~(0xfff) );
-    mode = flag >1 ? MPOL_INTERLEAVE: MPOL_BIND;
+    }
+
+
+
     for(i = 0; i < n_nodes; i++) {
-        if(flag == 0) 
-             node_mask = mem_manager->mcdram_sets[i];
+        if(flag == 0)
+             hwloc_bitmap_copy(nodeset, mem_manager->mcdram_sets[i]);
         else if (flag == 1) 
-             node_mask = mem_manager->ddr_sets[i];
+             hwloc_bitmap_copy(nodeset,mem_manager->ddr_sets[i]);
         else
-            node_mask = mem_manager->ddr_sets[i]| mem_manager->mcdram_sets[i];
-        printf("%p bind %ld tu %lx\n",current_addr,  chunk_size, node_mask);
-        ret =  mbind(current_addr, chunk_size, mode,
-                &node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
-        if(ret)
-            printf("errpor\n");
+             hwloc_bitmap_or(nodeset, mem_manager->mcdram_sets[i],  mem_manager->ddr_sets[i]);
+
+            ret = hwloc_set_area_membind_nodeset(mem_manager->topology, current_addr, chunk_size,
+                           nodeset, mode,  HWLOC_MEMBIND_MIGRATE);
+
         current_addr += chunk_size;
     }
+    hwloc_bitmap_free(nodeset);
     return ret;
 
  }
@@ -243,18 +247,14 @@ static inline void  get_best_layout()
     int w, i;
     int W;
     size_t min;
-    int ws[n_elements]; 
+    int ws[n_elements];
     struct node *current = head;
 
     size_t max_size = mem_manager->mcdram_avail;
-    int mode = (mem_manager->mcdram_nodes > 1) ? MPOL_INTERLEAVE: MPOL_BIND;
+
+    hwloc_membind_policy_t  mode = (mem_manager->ddr_nodes> 1) ? HWLOC_MEMBIND_INTERLEAVE: HWLOC_MEMBIND_BIND;
     assert(head);
     min =  head->size;
-    unsigned long nodemask, node_mask, ddr_node_mask;
-    struct bitmask nodemask_bm = {NUMA_NUM_NODES, &nodemask};
-    copy_bitmask_to_bitmask(numa_all_nodes_ptr, &nodemask_bm);
-    node_mask = hwloc_bitmap_to_ulong(mem_manager->all_mcdram);
-    ddr_node_mask = hwloc_bitmap_to_ulong(mem_manager->all_ddr);
 
     W = (size_t)max_size/min;
 
@@ -299,22 +299,18 @@ static inline void  get_best_layout()
         if(is_in[i] == 1)
         {
             if((current->location != MCDRAM_KNP ))
-                if( (mem_manager->mcdram_nodes > 1) ) 
+               if( (mem_manager->mcdram_nodes > 1) ) 
                     bind_strided( current->addr, current->size, 0);
-                else 
-                    mbind(current->addr, current->size,    mode,
-                            &node_mask, NUMA_NUM_NODES , MPOL_MF_MOVE );
-
+                else
+                    hwloc_set_area_membind_nodeset(mem_manager->topology, current->addr, current->size,
+                           mem_manager->all_mcdram, mode,  HWLOC_MEMBIND_MIGRATE|HWLOC_MEMBIND_STRICT);
             current->location = MCDRAM_KNP;
             mem_manager->mcdram_avail-=current->size;
         }
         else if(current->priority != 0) {
             if((current->location != DDR_KNP) )
-          //                if( (mem_manager->ddr_nodes > 1) ) 
-        //                    bind_strided( current->addr, current->size, 1);
-            //                else
-                                       mbind(current->addr, current->size,  MPOL_INTERLEAVE,
-                                    &ddr_node_mask, NUMA_NUM_NODES, MPOL_MF_MOVE);
+                hwloc_set_area_membind_nodeset(mem_manager->topology, current->addr, current->size,
+                              mem_manager->all_ddr, mode,  HWLOC_MEMBIND_MIGRATE);
             current->location = DDR_KNP;
         }
         else
