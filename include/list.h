@@ -2,7 +2,6 @@
 #define LIST_H
 #include <numa.h>
 #include <numaif.h>
-#define _GNU_SOURCE   
 #include <sys/mman.h>
 #include <errno.h>
 enum memory_location{
@@ -227,7 +226,7 @@ static inline int bind_strided( void *addr, size_t size, int flag)
              hwloc_bitmap_copy(nodeset,mem_manager->ddr_sets[i]);
         else
              hwloc_bitmap_or(nodeset, mem_manager->mcdram_sets[i],  mem_manager->ddr_sets[i]);
-
+        printf("bind to %x\n", hwloc_bitmap_to_ulong(nodeset));
             ret = hwloc_set_area_membind_nodeset(mem_manager->topology, current_addr, chunk_size,
                            nodeset, mode,  HWLOC_MEMBIND_MIGRATE);
 
@@ -251,7 +250,7 @@ static inline void  get_best_layout()
     struct node *current = head;
 
     size_t max_size = mem_manager->mcdram_avail;
-
+    hwloc_nodeset_t all_nodes = hwloc_bitmap_alloc_full();
     hwloc_membind_policy_t  mode = (mem_manager->ddr_nodes> 1) ? HWLOC_MEMBIND_INTERLEAVE: HWLOC_MEMBIND_BIND;
     assert(head);
     min =  head->size;
@@ -309,8 +308,12 @@ static inline void  get_best_layout()
         }
         else if(current->priority != 0) {
             if((current->location != DDR_KNP) )
-                hwloc_set_area_membind_nodeset(mem_manager->topology, current->addr, current->size,
-                              mem_manager->all_ddr, mode,  HWLOC_MEMBIND_MIGRATE);
+//             if( (mem_manager->mcdram_nodes > 1) ) 
+//                    bind_strided( current->addr, current->size, 2);
+  //              else
+             hwloc_set_area_membind_nodeset(mem_manager->topology, current->addr, current->size,
+                              all_nodes, mode,  HWLOC_MEMBIND_MIGRATE);
+            printf("bind to %lx\n", hwloc_bitmap_to_ulong(all_nodes));
             current->location = DDR_KNP;
         }
         else

@@ -25,17 +25,17 @@ OBJ_MALLOC = obj/hexe.o obj/verify.o
 clean:
 	rm -rf obj/* examples/*.bin
 
-CFLAGS =   -O3  -xMIC-AVX512  -static-intel  -restrict -fasm-blocks   \
+CFLAGS =   -O3  -xMIC-AVX512 -ipo  -static-intel  -restrict -fasm-blocks   \
 		      -I/soft/perftools/tau/papi-knl/include\
 	          -qopenmp 
 
-CFLAGS_MALLOC =  -O3 -xMIC-AVX512   -restrict -fasm-blocks -I./src -I./include 
+CFLAGS_MALLOC =  -O3 -xMIC-AVX512 -ipo  -restrict -fasm-blocks -I./src -I./include 
 
 CFLAGS  += -I./include/ -I./src 
 
-LIBS =  -qopenmp -lpapi -lnuma  -lhwloc -parallel -L/soft/perftools/tau/papi-knl/lib/
+LIBS =  -qopenmp -lpapi  -lhwloc -parallel -L/soft/perftools/tau/papi-knl/lib/
 
-CLINKFLAGS =	-O3 -xMIC-AVX512 -restrict -fasm-blocks  -g
+CLINKFLAGS =	-O3 -xMIC-AVX512 -restrict -fasm-blocks  -g -ipo
 
 lib/libhexe.so: $(OBJ) 
 	$(CC) -shared -Wl,-soname,libhexe.so.1  -o $@  $(OBJ) -lc

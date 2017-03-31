@@ -23,7 +23,7 @@ static inline int determine_chunk(int x, int y, int threads) {
     size_t sizexy = (x+2) *(y+2);
    size_t  avail = hexe_avail_mcdram(); 
    int chunk_per_thread =  avail/(threads * sizexy * sizeof(double) * 8 );
-    return 2 * threads; 
+    return chunk_per_thread * threads; 
 
 }
 int id, threadchunk;
@@ -237,10 +237,11 @@ printf("Init done\n");
             int start = 1 +CHUNK*k+threadchunk*id;
             int end = min((start+threadchunk), (size_z+1));
             // printf("id: %d start %d, end %d\n",id, start, end);
-            if(need_fetch) {
+           if(need_fetch) {
                 size_t prefetch_offset = (start+CHUNK-1)*(size_x+2)*(size_y+2);
                 size_t prefetch_size = (size_x+2)* (size_y+2) * sizeof(double) * min((CHUNK+2), max(0, (long long)(size_z-(k+1)*CHUNK+2)));
                 //            printf("start %d, size %d \n", start,  min((CHUNK+2), (size_z-(k+1)*CHUNK+1))); 
+
 #pragma omp master
                 {
                     if(prefetch_size>2) 
@@ -298,7 +299,7 @@ printf("Init done\n");
  
  //       return ret;
     printf("res: %d\t %d\t %d\t %4.2f \n",size_x, size_y, iter,  get_seconds(&timer));
-    hexe_finalize();
+  //  hexe_finalize();
     printf("ende?\n");
 
 #ifdef USE_PAPI
